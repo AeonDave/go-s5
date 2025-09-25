@@ -2,9 +2,6 @@ package socks5_test
 
 import (
 	"bytes"
-	socks5 "go-s5"
-	"go-s5/auth"
-	"go-s5/internal/protocol"
 	"io"
 	"log"
 	"net"
@@ -12,13 +9,17 @@ import (
 	"testing"
 	"time"
 
+	s5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/auth"
+	"github.com/AeonDave/go-s5/internal/protocol"
+
 	"github.com/stretchr/testify/require"
 )
 
 func TestAuth_NoAuth(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{&auth.NoAuthAuthenticator{}}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		s5.WithAuthMethods([]auth.Authenticator{&auth.NoAuthAuthenticator{}}),
+		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 
@@ -38,8 +39,8 @@ func TestAuth_NoAuth(t *testing.T) {
 
 func TestAuth_UserPass_Valid(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		s5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
+		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 	conn, err := net.Dial("tcp", listen)
@@ -66,9 +67,9 @@ func TestAuth_UserPass_Valid(t *testing.T) {
 
 func TestAuth_UserPass_Invalid(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithHandshakeTimeout(500*time.Millisecond),
+		s5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
+		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		s5.WithHandshakeTimeout(500*time.Millisecond),
 	)
 	defer stop()
 	conn, err := net.Dial("tcp", listen)
@@ -100,8 +101,8 @@ func TestAuth_UserPass_Invalid(t *testing.T) {
 func TestAuth_NoSupported(t *testing.T) {
 	// Server only supports userpass; client offers only no-auth
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		s5.WithAuthMethods([]auth.Authenticator{auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}}),
+		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 	conn, err := net.Dial("tcp", listen)

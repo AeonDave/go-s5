@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	socks5 "go-s5"
-	"go-s5/internal/protocol"
 	"io"
 	"log"
 	"net"
 	"os"
 	"testing"
+
+	socks5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )

@@ -2,14 +2,15 @@ package s5
 
 import (
 	"context"
-	"go-s5/auth"
-	"go-s5/handler"
-	"go-s5/internal/buffer"
-	"go-s5/resolver"
-	"go-s5/rules"
 	"io"
 	"net"
 	"time"
+
+	"github.com/AeonDave/go-s5/auth"
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/buffer"
+	"github.com/AeonDave/go-s5/resolver"
+	"github.com/AeonDave/go-s5/rules"
 )
 
 type Option func(s *Server)

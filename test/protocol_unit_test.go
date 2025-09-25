@@ -2,11 +2,12 @@ package socks5
 
 import (
 	"bytes"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
 	"reflect"
 	"testing"
+
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

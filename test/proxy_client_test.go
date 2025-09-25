@@ -1,14 +1,15 @@
 package socks5_test
 
 import (
-	socks5 "go-s5"
-	"go-s5/auth"
 	"io"
 	"log"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	socks5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/auth"
 
 	"github.com/stretchr/testify/require"
 	xproxy "golang.org/x/net/proxy"

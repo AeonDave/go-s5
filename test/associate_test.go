@@ -3,15 +3,16 @@ package socks5_test
 import (
 	"bytes"
 	"encoding/binary"
-	socks5 "go-s5"
-	"go-s5/auth"
-	"go-s5/internal/protocol"
 	"io"
 	"log"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	s5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/auth"
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )
@@ -49,8 +50,8 @@ func TestSOCKS5_Associate(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		s5.WithAuthMethods([]auth.Authenticator{cator}),
+		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 

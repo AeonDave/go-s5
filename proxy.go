@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
 	"strings"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 type closeWriter interface {

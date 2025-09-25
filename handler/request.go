@@ -2,10 +2,11 @@ package handler
 
 import (
 	"context"
-	"go-s5/auth"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
+
+	"github.com/AeonDave/go-s5/auth"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 type AddressRewriter interface {
@@ -14,7 +15,7 @@ type AddressRewriter interface {
 
 type Request struct {
 	protocol.Request
-	AuthContext *auth.AuthContext
+	AuthContext *auth.AContext
 	LocalAddr   net.Addr
 	RemoteAddr  net.Addr
 	DestAddr    *protocol.AddrSpec

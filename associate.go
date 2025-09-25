@@ -3,14 +3,15 @@ package s5
 import (
 	"context"
 	"fmt"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 type udpPeer struct {

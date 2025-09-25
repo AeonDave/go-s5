@@ -2,9 +2,10 @@ package socks5_test
 
 import (
 	"bytes"
-	socks5 "go-s5"
 	"io"
 	"testing"
+
+	socks5 "github.com/AeonDave/go-s5"
 )
 
 // Writer implementing ReaderFrom and closeWriter

@@ -3,7 +3,7 @@ package auth
 import "io"
 
 type Authenticator interface {
-	Authenticate(io.Reader, io.Writer, string) (*AuthContext, error)
+	Authenticate(io.Reader, io.Writer, string) (*AContext, error)
 	GetCode() uint8
 }
 

@@ -3,9 +3,10 @@ package s5
 import (
 	"context"
 	"fmt"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 func (sf *Server) handleConnect(ctx context.Context, writer io.Writer, request *handler.Request) error {

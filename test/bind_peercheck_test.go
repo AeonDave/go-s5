@@ -3,14 +3,15 @@ package socks5_test
 import (
 	"bytes"
 	"fmt"
-	socks5 "go-s5"
-	"go-s5/internal/protocol"
 	"io"
 	"log"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	socks5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )

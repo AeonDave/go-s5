@@ -2,15 +2,16 @@ package socks5_test
 
 import (
 	"bytes"
-	socks5 "go-s5"
-	"go-s5/internal/protocol"
-	"go-s5/rules"
 	"io"
 	"log"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	socks5 "github.com/AeonDave/go-s5"
+	"github.com/AeonDave/go-s5/internal/protocol"
+	"github.com/AeonDave/go-s5/rules"
 
 	"github.com/stretchr/testify/require"
 )

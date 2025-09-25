@@ -2,11 +2,12 @@ package socks5
 
 import (
 	"context"
-	"go-s5/rules"
 	"testing"
 
-	"go-s5/handler"
-	"go-s5/internal/protocol"
+	"github.com/AeonDave/go-s5/rules"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )

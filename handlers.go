@@ -3,10 +3,11 @@ package s5
 import (
 	"context"
 	"fmt"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 func (sf *Server) handleRequest(write io.Writer, req *handler.Request) error {

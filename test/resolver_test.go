@@ -2,8 +2,9 @@ package socks5
 
 import (
 	"context"
-	"go-s5/resolver"
 	"testing"
+
+	"github.com/AeonDave/go-s5/resolver"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

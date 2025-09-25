@@ -1,10 +1,11 @@
 package socks5_test
 
 import (
-	socks5 "go-s5"
 	"net"
 	"testing"
 	"time"
+
+	socks5 "github.com/AeonDave/go-s5"
 )
 
 // Connection that does not send handshake should be closed after handshake timeout

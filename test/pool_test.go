@@ -1,9 +1,10 @@
 package socks5
 
 import (
-	"go-s5/internal/buffer"
 	"sync"
 	"testing"
+
+	"github.com/AeonDave/go-s5/internal/buffer"
 
 	"github.com/stretchr/testify/require"
 )

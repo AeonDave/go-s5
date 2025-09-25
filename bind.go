@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
 	"net"
 	"time"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 func (sf *Server) handleBind(_ context.Context, writer io.Writer, request *handler.Request) error {

@@ -2,8 +2,9 @@ package rules
 
 import (
 	"context"
-	"go-s5/handler"
-	"go-s5/internal/protocol"
+
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 type RuleSet interface {

@@ -1,8 +1,9 @@
 package auth
 
 import (
-	"go-s5/internal/protocol"
 	"io"
+
+	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
 type UserPassAuthenticator struct {
@@ -11,7 +12,7 @@ type UserPassAuthenticator struct {
 
 func (a UserPassAuthenticator) GetCode() uint8 { return protocol.MethodUserPassAuth }
 
-func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer, userAddr string) (*AuthContext, error) {
+func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer, userAddr string) (*AContext, error) {
 	if _, err := writer.Write([]byte{protocol.VersionSocks5, protocol.MethodUserPassAuth}); err != nil {
 		return nil, err
 	}
@@ -27,7 +28,7 @@ func (a UserPassAuthenticator) Authenticate(reader io.Reader, writer io.Writer, 
 	}
 
 	_, _ = writer.Write([]byte{protocol.UserPassAuthVersion, protocol.AuthSuccess})
-	return &AuthContext{
+	return &AContext{
 		Method: protocol.MethodUserPassAuth,
 		Payload: map[string]string{
 			"username": string(nup.User),

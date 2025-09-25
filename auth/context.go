@@ -1,6 +1,6 @@
 package auth
 
-type AuthContext struct {
+type AContext struct {
 	Method  uint8
 	Payload map[string]string
 }

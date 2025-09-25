@@ -3,15 +3,16 @@ package socks5_test
 import (
 	"bytes"
 	"context"
-	socks5 "go-s5"
-	socks5_handler "go-s5/handler"
-	"go-s5/internal/protocol"
 	"io"
 	"log"
 	"net"
 	"os"
 	"sync/atomic"
 	"testing"
+
+	socks5 "github.com/AeonDave/go-s5"
+	socks5_handler "github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/protocol"
 
 	"github.com/stretchr/testify/require"
 )

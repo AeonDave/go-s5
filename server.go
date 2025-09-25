@@ -9,16 +9,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"go-s5/auth"
-	"go-s5/handler"
-	"go-s5/internal/buffer"
-	"go-s5/internal/protocol"
-	"go-s5/resolver"
-	"go-s5/rules"
 	"io"
 	"log"
 	"net"
 	"time"
+
+	"github.com/AeonDave/go-s5/auth"
+	"github.com/AeonDave/go-s5/handler"
+	"github.com/AeonDave/go-s5/internal/buffer"
+	"github.com/AeonDave/go-s5/internal/protocol"
+	"github.com/AeonDave/go-s5/resolver"
+	"github.com/AeonDave/go-s5/rules"
 )
 
 type GPool interface {
@@ -208,7 +209,7 @@ func (sf *Server) tlsHandshakeIfAny(conn net.Conn) error {
 	return nil
 }
 
-func (sf *Server) enrichAuthFromTLS(conn net.Conn, authContext *auth.AuthContext) {
+func (sf *Server) enrichAuthFromTLS(conn net.Conn, authContext *auth.AContext) {
 	tconn, ok := conn.(*tls.Conn)
 	if !ok || authContext == nil {
 		return
@@ -243,7 +244,7 @@ func firstIPFromCert(cert *x509.Certificate) string {
 	return ""
 }
 
-func (sf *Server) authenticate(conn io.Writer, bufConn io.Reader, userAddr string, methods []byte) (*auth.AuthContext, error) {
+func (sf *Server) authenticate(conn io.Writer, bufConn io.Reader, userAddr string, methods []byte) (*auth.AContext, error) {
 	for _, authMethod := range sf.authMethods {
 		for _, method := range methods {
 			if authMethod.GetCode() == method {
