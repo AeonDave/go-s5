@@ -1,4 +1,4 @@
-module go-s5
+module github.com/AeonDave/go-s5
 
 go 1.24.0
 
