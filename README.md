@@ -1,4 +1,4 @@
-# mu-socks5
+# go-s5
 
 A minimal, fast, and extensible SOCKS5 server written in Go. It implements the three primary commands from RFC 1928: CONNECT, BIND, and UDP ASSOCIATE. The library exposes clear extension points for authentication, authorization, DNS resolution, address rewriting, and per‑command middleware. It also includes pragmatic I/O optimizations for high throughput.
 
@@ -45,11 +45,11 @@ Install
 - Go 1.24+
 - As a library:
 ```
-go get mu-socks5
+go get go-s5
 ```
 Import:
 ```
-import socks5 "mu-socks5"
+import socks5 "go-s5"
 ```
 
 Quick Start
@@ -59,7 +59,7 @@ package main
 
 import (
     "log"
-    socks5 "mu-socks5"
+    socks5 "go-s5"
 )
 
 func main() {
