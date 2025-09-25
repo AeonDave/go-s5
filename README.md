@@ -1,6 +1,7 @@
 # go-s5
 
-A minimal, fast, and extensible SOCKS5 server written in Go. It implements the three primary commands from RFC 1928: CONNECT, BIND, and UDP ASSOCIATE. The library exposes clear extension points for authentication, authorization, DNS resolution, address rewriting, and per‑command middleware. It also includes pragmatic I/O optimizations for high throughput.
+A minimal, fast, and extensible SOCKS5 server lib written in Go. 
+It implements the three primary commands from RFC 1928: CONNECT, BIND, and UDP ASSOCIATE. The library exposes clear extension points for authentication, authorization, DNS resolution, address rewriting, and per‑command middleware. It also includes pragmatic I/O optimizations for high throughput.
 
 Contents
 - Overview
