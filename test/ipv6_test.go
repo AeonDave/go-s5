@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +45,7 @@ func TestIPv6_CONNECT(t *testing.T) {
 	defer stopB()
 
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 
@@ -83,8 +83,8 @@ func TestIPv6_CONNECT(t *testing.T) {
 func TestIPv6_BIND(t *testing.T) {
 	// Control over IPv4, but BIND will listen on IPv6 if bindIP set
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithBindIP(net.IPv6loopback),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithBindIP(net.IPv6loopback),
 	)
 	defer stop()
 

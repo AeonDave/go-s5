@@ -8,8 +8,8 @@ import (
 	"os"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,9 +18,9 @@ import (
 func TestUDP_Associate_BindIPv4Used(t *testing.T) {
 	loc4 := net.ParseIP("127.0.0.1")
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithUseBindIpBaseResolveAsUdpAddr(true),
-		socks5.WithBindIP(loc4),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithUseBindIpBaseResolveAsUdpAddr(true),
+		server.WithBindIP(loc4),
 	)
 	defer stop()
 

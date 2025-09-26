@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	socks5_handler "github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -96,11 +96,11 @@ func TestTLS_MutualAuth_SucceedsAndExposesCert(t *testing.T) {
 	require.NoError(t, err)
 
 	// Custom connect handler echoes tls.subject payload
-	srv := socks5.NewServer(
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithConnectHandle(func(ctx context.Context, w io.Writer, r *socks5_handler.Request) error {
+	srv := server.New(
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithConnectHandle(func(ctx context.Context, w io.Writer, r *socks5_handler.Request) error {
 			// reply success first
-			_ = socks5.SendReply(w, protocol.RepSuccess, &net.TCPAddr{IP: net.IPv4zero, Port: 0})
+			_ = server.SendReply(w, protocol.RepSuccess, &net.TCPAddr{IP: net.IPv4zero, Port: 0})
 			subj := ""
 			if r.AuthContext != nil {
 				subj = r.AuthContext.Payload["tls.subject"]
@@ -161,7 +161,7 @@ func TestTLS_MutualAuth_FailsWithoutClientCert(t *testing.T) {
 		_ = ln.Close()
 	}(ln)
 
-	srv := socks5.NewServer(socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))))
+	srv := server.New(server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))))
 	done := make(chan struct{})
 	go func() { defer close(done); _ = srv.Serve(ln) }()
 	defer func() { _ = ln.Close(); <-done }()

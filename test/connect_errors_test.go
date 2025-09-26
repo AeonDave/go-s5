@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
 	"github.com/AeonDave/go-s5/rules"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +19,7 @@ import (
 // Connecting to an unused port should yield RepConnectionRefused
 func TestCONNECT_ConnectionRefused(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 
@@ -56,8 +56,8 @@ func TestCONNECT_ConnectionRefused(t *testing.T) {
 // RuleSet denies CONNECT should yield RepRuleFailure
 func TestCONNECT_RuleBlocked(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithRule(rules.NewPermitNone()),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithRule(rules.NewPermitNone()),
 	)
 	defer stop()
 

@@ -9,9 +9,9 @@ import (
 	"os"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	socks5_handler "github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -19,8 +19,8 @@ import (
 // Verify custom Bind handler is invoked and short-circuits default behavior.
 func TestBind_CustomHandler_OverridesDefault(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithBindHandle(func(_ context.Context, w io.Writer, _ *socks5_handler.Request) error {
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithBindHandle(func(_ context.Context, w io.Writer, _ *socks5_handler.Request) error {
 			// Just send a success reply with dummy addr
 			rsp := protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess,
 				BndAddr: protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 0, AddrType: protocol.ATYPIPv4}}
@@ -56,8 +56,8 @@ func TestBind_CustomHandler_OverridesDefault(t *testing.T) {
 // Verify custom Associate handler is invoked and short-circuits default behavior.
 func TestAssociate_CustomHandler_OverridesDefault(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithAssociateHandle(func(_ context.Context, w io.Writer, _ *socks5_handler.Request) error {
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithAssociateHandle(func(_ context.Context, w io.Writer, _ *socks5_handler.Request) error {
 			rsp := protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess,
 				BndAddr: protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 0, AddrType: protocol.ATYPIPv4}}
 			_, err := w.Write(rsp.Bytes())

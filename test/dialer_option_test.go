@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
+	client "github.com/AeonDave/go-s5/client"
 )
 
 type spyDialer struct {
@@ -17,7 +17,7 @@ type spyDialer struct {
 	deadline time.Duration
 }
 
-func (s *spyDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+func (s *spyDialer) DialContext(ctx context.Context, _ string, address string) (net.Conn, error) {
 	s.called = true
 	if s.wantAddr != "" && s.wantAddr != address {
 		s.t.Errorf("spyDialer: got addr %s, want %s", address, s.wantAddr)
@@ -33,10 +33,11 @@ func (s *spyDialer) DialContext(ctx context.Context, network, address string) (n
 
 func TestClientWithDialer_UsesDialer_And_AppliesTimeout_WhenNoCtxDeadline(t *testing.T) {
 	sd := &spyDialer{t: t, wantAddr: "127.0.0.1:1080"}
-	chain := []socks5.Hop{{Address: sd.wantAddr}}
+	chain := []client.Hop{{Address: sd.wantAddr}}
 	ctx := context.Background()
 	start := time.Now()
-	_, err := socks5.DialChain(ctx, chain, "example.org:443", 50*time.Millisecond, socks5.ClientWithDialer(sd))
+	cli := client.New(client.WithDialer(sd))
+	_, err := cli.DialChain(ctx, chain, "example.org:443", 50*time.Millisecond)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("expected error due to timeout, got nil")
@@ -54,11 +55,12 @@ func TestClientWithDialer_UsesDialer_And_AppliesTimeout_WhenNoCtxDeadline(t *tes
 
 func TestClientWithDialer_RespectsCallerCtxDeadline_OverDialTimeout(t *testing.T) {
 	sd := &spyDialer{t: t, wantAddr: "127.0.0.1:1081"}
-	chain := []socks5.Hop{{Address: sd.wantAddr}}
+	chain := []client.Hop{{Address: sd.wantAddr}}
 	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := socks5.DialChain(ctx, chain, "example.org:443", 2*time.Second, socks5.ClientWithDialer(sd))
+	cli := client.New(client.WithDialer(sd))
+	_, err := cli.DialChain(ctx, chain, "example.org:443", 2*time.Second)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatalf("expected error due to caller ctx deadline, got nil")

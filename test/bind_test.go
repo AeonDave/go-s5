@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,8 +18,8 @@ import (
 // Expect two replies: first success with bind address, then TTLExpired after deadline.
 func TestBIND_TTLExpired(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithBindAcceptTimeout(150*time.Millisecond),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithBindAcceptTimeout(150*time.Millisecond),
 	)
 	defer stop()
 

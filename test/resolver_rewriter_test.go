@@ -10,9 +10,9 @@ import (
 	"os"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -36,8 +36,8 @@ func (r rewriteTo) Rewrite(ctx context.Context, _ *handler.Request) (context.Con
 
 func TestResolver_ErrorMapsToHostUnreachable(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithResolver(failingResolver{}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithResolver(failingResolver{}),
 	)
 	defer stop()
 
@@ -70,8 +70,8 @@ func TestRewriter_OverridesDestination(t *testing.T) {
 	defer stopBackend()
 
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithRewriter(rewriteTo{ip: net.ParseIP("127.0.0.1"), port: backend.Port}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithRewriter(rewriteTo{ip: net.ParseIP("127.0.0.1"), port: backend.Port}),
 	)
 	defer stop()
 

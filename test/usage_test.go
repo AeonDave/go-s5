@@ -8,13 +8,13 @@ import (
 	"net"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/buffer"
 	"github.com/AeonDave/go-s5/internal/protocol"
 	"github.com/AeonDave/go-s5/resolver"
 	"github.com/AeonDave/go-s5/rules"
+	server "github.com/AeonDave/go-s5/server"
 )
 
 // simple goroutine pool for examples
@@ -44,12 +44,12 @@ func (rewriteAll) Rewrite(ctx context.Context, _ *handler.Request) (context.Cont
 }
 
 // Example demonstrating basic server construction with options.
-func ExampleNewServer_basic() {
-	srv := socks5.NewServer(
-		socks5.WithCredential(auth.StaticCredentials{"user": "pass"}),
-		socks5.WithBindIP(net.IPv4(127, 0, 0, 1)),
-		socks5.WithResolver(resolver.DNSResolver{}),
-		socks5.WithRule(rules.NewPermitAll()),
+func ExampleNew_basic() {
+	srv := server.New(
+		server.WithCredential(auth.StaticCredentials{"user": "pass"}),
+		server.WithBindIP(net.IPv4(127, 0, 0, 1)),
+		server.WithResolver(resolver.DNSResolver{}),
+		server.WithRule(rules.NewPermitAll()),
 	)
 	// Use srv.ListenAndServe("tcp", ":1080") in your main.
 	fmt.Println(srv != nil)
@@ -77,14 +77,14 @@ func ExampleNewPermitAll() {
 // Example configuring timeouts, keepalive, and custom dialers.
 func Example_options_dialsAndTimeouts() {
 	d := net.Dialer{Timeout: 5 * time.Second}
-	srv := socks5.NewServer(
-		socks5.WithHandshakeTimeout(2*time.Second),
-		socks5.WithTCPKeepAlive(30*time.Second),
-		socks5.WithDialer(d),
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+	srv := server.New(
+		server.WithHandshakeTimeout(2*time.Second),
+		server.WithTCPKeepAlive(30*time.Second),
+		server.WithDialer(d),
+		server.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return d.DialContext(ctx, network, addr)
 		}),
-		socks5.WithDialAndRequest(func(ctx context.Context, network, addr string, req *handler.Request) (net.Conn, error) {
+		server.WithDialAndRequest(func(ctx context.Context, network, addr string, req *handler.Request) (net.Conn, error) {
 			// could inspect req.AuthContext/req.DestAddr here
 			return d.DialContext(ctx, network, addr)
 		}),
@@ -95,11 +95,11 @@ func Example_options_dialsAndTimeouts() {
 
 // Example demonstrating UDP/BIND tuning knobs.
 func Example_options_udpAndBind() {
-	srv := socks5.NewServer(
-		socks5.WithUseBindIpBaseResolveAsUdpAddr(true),
-		socks5.WithBindAcceptTimeout(500*time.Millisecond),
-		socks5.WithBindPeerCheckIPOnly(true),
-		socks5.WithUDPAssociateLimits(1024, 2*time.Minute),
+	srv := server.New(
+		server.WithUseBindIpBaseResolveAsUdpAddr(true),
+		server.WithBindAcceptTimeout(500*time.Millisecond),
+		server.WithBindPeerCheckIPOnly(true),
+		server.WithUDPAssociateLimits(1024, 2*time.Minute),
 	)
 	fmt.Println(srv != nil)
 	// Output: true
@@ -107,9 +107,9 @@ func Example_options_udpAndBind() {
 
 // Example showing custom buffer pool and goroutine pool.
 func Example_options_bufferAndPool() {
-	srv := socks5.NewServer(
-		socks5.WithBufferPool(buffer.NewPool(64*1024)),
-		socks5.WithGPool(gpool{}),
+	srv := server.New(
+		server.WithBufferPool(buffer.NewPool(64*1024)),
+		server.WithGPool(gpool{}),
 	)
 	fmt.Println(srv != nil)
 	// Output: true
@@ -123,7 +123,7 @@ func Example_options_mtls() {
 		// ClientCAs:    caPool,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 	}
-	srv := socks5.NewServer()
+	srv := server.New()
 	// In main(): _ = srv.ListenAndServeTLS("tcp", ":1080", tlsCfg)
 	fmt.Println(tlsCfg.ClientAuth == tls.RequireAndVerifyClientCert && srv != nil)
 	// Output: true
@@ -131,13 +131,13 @@ func Example_options_mtls() {
 
 // Example plugging in middleware and custom handlers for commands.
 func Example_handlers_and_middleware() {
-	srv := socks5.NewServer(
-		socks5.WithConnectMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
-		socks5.WithBindMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
-		socks5.WithAssociateMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
-		socks5.WithConnectHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
-		socks5.WithBindHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
-		socks5.WithAssociateHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+	srv := server.New(
+		server.WithConnectMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+		server.WithBindMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+		server.WithAssociateMiddleware(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+		server.WithConnectHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+		server.WithBindHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
+		server.WithAssociateHandle(func(ctx context.Context, w io.Writer, r *handler.Request) error { return nil }),
 	)
 	fmt.Println(srv != nil)
 	// Output: true
@@ -145,21 +145,21 @@ func Example_handlers_and_middleware() {
 
 // Example for a custom NameResolver.
 func Example_customResolver() {
-	srv := socks5.NewServer(socks5.WithResolver(exampleResolver{}))
+	srv := server.New(server.WithResolver(exampleResolver{}))
 	fmt.Println(srv != nil)
 	// Output: true
 }
 
 // Example for a custom RuleSet.
 func Example_customRules() {
-	srv := socks5.NewServer(socks5.WithRule(onlyConnectRule{}))
+	srv := server.New(server.WithRule(onlyConnectRule{}))
 	fmt.Println(srv != nil)
 	// Output: true
 }
 
 // Example for an address rewriter.
 func Example_customRewriter() {
-	srv := socks5.NewServer(socks5.WithRewriter(rewriteAll{}))
+	srv := server.New(server.WithRewriter(rewriteAll{}))
 	fmt.Println(srv != nil)
 	// Output: true
 }

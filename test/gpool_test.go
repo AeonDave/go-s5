@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -30,8 +30,8 @@ func Test_GPool_Submit_IsUsed(t *testing.T) {
 
 	var pool countingGPool
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithGPool(&pool),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithGPool(&pool),
 	)
 	defer stop()
 

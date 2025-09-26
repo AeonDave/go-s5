@@ -1,4 +1,4 @@
-package s5
+package server
 
 const (
 	fmtFailedSendReply = "failed to send reply, %v"

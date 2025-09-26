@@ -1,4 +1,4 @@
-package s5
+package server
 
 import (
 	"bytes"

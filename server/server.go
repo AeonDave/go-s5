@@ -1,4 +1,4 @@
-package s5
+package server
 
 import (
 	"bufio"
@@ -54,7 +54,7 @@ type Server struct {
 	udpIdleTimeout                time.Duration
 }
 
-func NewServer(opts ...Option) *Server {
+func New(opts ...Option) *Server {
 	srv := &Server{
 		authMethods: []auth.Authenticator{},
 		bufferPool:  buffer.NewPool(32 * 1024),

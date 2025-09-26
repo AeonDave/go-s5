@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -20,9 +20,9 @@ func TestUDP_Associate_BindIPUsed(t *testing.T) {
 	loc6 := net.IPv6loopback
 	// control TCP still on IPv4; configure UDP bind to IPv6
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithUseBindIpBaseResolveAsUdpAddr(true),
-		socks5.WithBindIP(loc6),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithUseBindIpBaseResolveAsUdpAddr(true),
+		server.WithBindIP(loc6),
 	)
 	defer stop()
 
@@ -54,7 +54,7 @@ func TestUDP_Associate_BindIPUsed(t *testing.T) {
 func TestUDP_Associate_StrictSourcePortMatch(t *testing.T) {
 	loc := net.ParseIP("127.0.0.1")
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 
@@ -160,8 +160,8 @@ func TestUDP_Associate_MaxPeersExceeded(t *testing.T) {
 	}()
 
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithUDPAssociateLimits(2, 300*time.Millisecond),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithUDPAssociateLimits(2, 300*time.Millisecond),
 	)
 	defer stop()
 

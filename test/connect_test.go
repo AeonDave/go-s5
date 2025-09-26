@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
 	socks5_handler "github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,9 +42,9 @@ func startTCPBackend(t *testing.T) (addr *net.TCPAddr, stop func()) {
 	return l.Addr().(*net.TCPAddr), func() { _ = l.Close(); <-stopped }
 }
 
-func startSocks5(t *testing.T, opts ...socks5.Option) (listen string, stop func()) {
+func startSocks5(t *testing.T, opts ...server.Option) (listen string, stop func()) {
 	t.Helper()
-	srv := socks5.NewServer(opts...)
+	srv := server.New(opts...)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	done := make(chan struct{})
@@ -63,9 +63,9 @@ func TestSOCKS5_Connect_OK(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
 			return net.Dial(network, backendAddr.String())
 		}),
 	)
@@ -116,12 +116,12 @@ func TestSOCKS5_Connect_CustomHandler(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
 			return net.Dial(network, backendAddr.String())
 		}),
-		socks5.WithConnectHandle(func(ctx context.Context, w io.Writer, _ *socks5_handler.Request) error {
+		server.WithConnectHandle(func(ctx context.Context, w io.Writer, _ *socks5_handler.Request) error {
 			rsp := protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess, BndAddr: protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), AddrType: protocol.ATYPIPv4}}
 			if _, err := w.Write(rsp.Bytes()); err != nil {
 				return err

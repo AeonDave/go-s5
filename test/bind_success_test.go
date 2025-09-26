@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -19,8 +19,8 @@ import (
 // BIND end-to-end: client requests BIND, peer connects, proxy forwards data both ways.
 func TestBIND_WithPeer_Success(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithBindPeerCheckIPOnly(true), // accept peer by IP (port wildcard)
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithBindPeerCheckIPOnly(true), // accept peer by IP (port wildcard)
 	)
 	defer stop()
 

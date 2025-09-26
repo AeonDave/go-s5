@@ -10,10 +10,9 @@ import (
 	"testing"
 	"time"
 
-	s5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/internal/protocol"
-
+	"github.com/AeonDave/go-s5/server"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,22 +20,22 @@ func TestSOCKS5_Associate(t *testing.T) {
 	locIP := net.ParseIP("127.0.0.1")
 	// upstream echo server over UDP
 	serverAddr := &net.UDPAddr{IP: locIP, Port: 0}
-	server, err := net.ListenUDP("udp", serverAddr)
+	s, err := net.ListenUDP("udp", serverAddr)
 	require.NoError(t, err)
 	defer func(server *net.UDPConn) {
 		_ = server.Close()
-	}(server)
+	}(s)
 	// update with allocated port
-	serverAddr = server.LocalAddr().(*net.UDPAddr)
+	serverAddr = s.LocalAddr().(*net.UDPAddr)
 	go func() {
 		buf := make([]byte, 2048)
 		for {
-			n, remote, err := server.ReadFrom(buf)
+			n, remote, err := s.ReadFrom(buf)
 			if err != nil {
 				return
 			}
 			if n > 0 {
-				_, _ = server.WriteTo([]byte("pong"), remote)
+				_, _ = s.WriteTo([]byte("pong"), remote)
 			}
 		}
 	}()
@@ -50,8 +49,8 @@ func TestSOCKS5_Associate(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		s5.WithAuthMethods([]auth.Authenticator{cator}),
-		s5.WithLogger(s5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 

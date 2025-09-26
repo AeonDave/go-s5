@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,8 +41,8 @@ func TestUDP_FQDNTarget(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 
@@ -99,7 +99,7 @@ func TestUDP_FQDNTarget(t *testing.T) {
 func TestUDP_DropFragmented(t *testing.T) {
 	locIP := net.ParseIP("127.0.0.1")
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 

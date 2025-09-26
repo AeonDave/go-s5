@@ -8,16 +8,16 @@ import (
 	"testing"
 	"time"
 
-	s5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
-	"github.com/AeonDave/go-s5/client"
+	client "github.com/AeonDave/go-s5/client"
 	"github.com/AeonDave/go-s5/protocol"
+	server "github.com/AeonDave/go-s5/server"
 	"github.com/stretchr/testify/require"
 )
 
-func startSocksServer(t *testing.T, opts ...s5.Option) (addr string, stop func()) {
+func startSocksServer(t *testing.T, opts ...server.Option) (addr string, stop func()) {
 	t.Helper()
-	srv := s5.NewServer(opts...)
+	srv := server.New(opts...)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	done := make(chan struct{})
@@ -99,7 +99,7 @@ func TestClientHandshakeConnect_NoAuth(t *testing.T) {
 		_ = conn.Close()
 	}(conn)
 
-	cli := s5.NewClient()
+	cli := client.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -121,7 +121,7 @@ func TestClientHandshakeConnect_NoAuth(t *testing.T) {
 }
 
 func TestClientHandshakeConnect_UserPass(t *testing.T) {
-	socksAddr, stopS := startSocksServer(t, s5.WithCredential(auth.StaticCredentials{"u": "p"}))
+	socksAddr, stopS := startSocksServer(t, server.WithCredential(auth.StaticCredentials{"u": "p"}))
 	defer stopS()
 
 	echoAddr, stopE := startTCPEcho(t)
@@ -133,11 +133,11 @@ func TestClientHandshakeConnect_UserPass(t *testing.T) {
 		_ = conn.Close()
 	}(conn)
 
-	cli := s5.NewClient()
+	cli := client.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err = cli.Handshake(ctx, conn, &s5.Credentials{Username: "u", Password: "p"})
+	_, err = cli.Handshake(ctx, conn, &client.Credentials{Username: "u", Password: "p"})
 	require.NoError(t, err)
 
 	dst, err := protocol.ParseAddrSpec(echoAddr)
@@ -163,7 +163,7 @@ func TestClientBind(t *testing.T) {
 		_ = conn.Close()
 	}(conn)
 
-	cli := s5.NewClient()
+	cli := client.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -225,7 +225,7 @@ func TestClientUDPAssociate(t *testing.T) {
 		_ = conn.Close()
 	}(conn)
 
-	cli := s5.NewClient()
+	cli := client.New()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

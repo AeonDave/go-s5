@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
+	server "github.com/AeonDave/go-s5/server"
 )
 
 // Writer implementing ReaderFrom and closeWriter
@@ -44,7 +44,7 @@ type cwWriter struct {
 func (w *cwWriter) CloseWrite() error { w.cwCalled = true; return nil }
 
 func TestProxy_FastPath_ReadFrom(t *testing.T) {
-	srv := socks5.NewServer()
+	srv := server.New()
 	w := &rfWriter{}
 	src := bytes.NewReader([]byte("hello"))
 	if err := srv.Proxy(w, src); err != nil {
@@ -62,7 +62,7 @@ func TestProxy_FastPath_ReadFrom(t *testing.T) {
 }
 
 func TestProxy_FastPath_WriteTo(t *testing.T) {
-	srv := socks5.NewServer()
+	srv := server.New()
 	r := &wtReader{data: []byte("hello")}
 	w := &cwWriter{}
 	if err := srv.Proxy(w, r); err != nil {
@@ -80,7 +80,7 @@ func TestProxy_FastPath_WriteTo(t *testing.T) {
 }
 
 func TestProxy_Fallback_CopyBuffer(t *testing.T) {
-	srv := socks5.NewServer()
+	srv := server.New()
 	var w bytes.Buffer
 	src := bytes.NewReader([]byte("hello"))
 	if err := srv.Proxy(&w, src); err != nil {
@@ -108,7 +108,7 @@ func (r *crReader) Read(p []byte) (int, error) {
 func (r *crReader) CloseRead() error { r.crCalled = true; return nil }
 
 func TestProxy_Fallback_Closes(t *testing.T) {
-	srv := socks5.NewServer()
+	srv := server.New()
 	r := &crReader{data: []byte("hello")}
 	w := &cwWriter{}
 	if err := srv.Proxy(w, r); err != nil {

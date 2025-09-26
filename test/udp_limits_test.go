@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -40,9 +40,9 @@ func TestUDP_Associate_LimitsAndIdleCleanup(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
-		socks5.WithUDPAssociateLimits(1, 300*time.Millisecond),
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithUDPAssociateLimits(1, 300*time.Millisecond),
 	)
 	defer stop()
 

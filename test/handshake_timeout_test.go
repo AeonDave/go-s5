@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
+	server "github.com/AeonDave/go-s5/server"
 )
 
 // Connection that does not send handshake should be closed after handshake timeout
 func TestHandshakeTimeout(t *testing.T) {
 	listen, stop := startSocks5(t,
-		socks5.WithHandshakeTimeout(100*time.Millisecond),
+		server.WithHandshakeTimeout(100*time.Millisecond),
 	)
 	defer stop()
 

@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	socks5 "github.com/AeonDave/go-s5"
 	socks5_handler "github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 )
@@ -26,15 +26,15 @@ func TestCONNECT_Dial_Precedence(t *testing.T) {
 	var dialReqCount int32
 
 	listen, stop := startSocks5(t,
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 		// Should NOT be used when WithDialAndRequest is present
-		socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		server.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
 			atomic.AddInt32(&dialCount, 1)
 			// If invoked, try dialing backend too to avoid masking failure
 			return net.Dial(network, backend.String())
 		}),
 		// Must take precedence
-		socks5.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
+		server.WithDialAndRequest(func(ctx context.Context, network, _ string, _ *socks5_handler.Request) (net.Conn, error) {
 			atomic.AddInt32(&dialReqCount, 1)
 			return net.Dial(network, backend.String())
 		}),

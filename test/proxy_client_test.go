@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/auth"
+	server "github.com/AeonDave/go-s5/server"
 
 	"github.com/stretchr/testify/require"
 	xproxy "golang.org/x/net/proxy"
@@ -40,8 +40,8 @@ func Test_SocksWithProxy(t *testing.T) {
 
 	cator := auth.UserPassAuthenticator{Credentials: auth.StaticCredentials{"foo": "bar"}}
 	listen, stop := startSocks5(t,
-		socks5.WithAuthMethods([]auth.Authenticator{cator}),
-		socks5.WithLogger(socks5.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithAuthMethods([]auth.Authenticator{cator}),
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
 	)
 	defer stop()
 

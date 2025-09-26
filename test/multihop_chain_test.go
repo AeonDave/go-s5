@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	socks5 "github.com/AeonDave/go-s5"
 	"github.com/AeonDave/go-s5/client"
 	"github.com/AeonDave/go-s5/protocol"
 
@@ -23,14 +22,12 @@ func TestClient_DialChain_TwoHops_TCP(t *testing.T) {
 	hop2, stop2 := startSocks5(t)
 	defer stop2()
 
-	chain := []socks5.Hop{{Address: hop1}, {Address: hop2}}
+	chain := []client.Hop{{Address: hop1}, {Address: hop2}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	conn, err := socks5.DialChain(ctx, chain, backendAddr.String(), 2*time.Second,
-		socks5.ClientWithHandshakeTimeout(1*time.Second),
-		socks5.ClientWithIOTimeout(2*time.Second),
-	)
+	cli := client.New(client.WithHandshakeTimeout(1*time.Second), client.WithIOTimeout(2*time.Second))
+	conn, err := cli.DialChain(ctx, chain, backendAddr.String(), 2*time.Second)
 	require.NoError(t, err)
 	defer func(conn net.Conn) {
 		_ = conn.Close()
@@ -70,21 +67,21 @@ func TestClient_DialChain_UDPAssociate(t *testing.T) {
 	hop2, stop2 := startSocks5(t)
 	defer stop2()
 
-	chain := []socks5.Hop{{Address: hop1}, {Address: hop2}}
+	chain := []client.Hop{{Address: hop1}, {Address: hop2}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Build chain TCP control connection to last hop
 	// Stop at last hop (finalTarget="") so UDPAssociate talks to SOCKS, not a tunneled endpoint
-	conn, err := socks5.DialChain(ctx, chain, "", 2*time.Second,
-		socks5.ClientWithHandshakeTimeout(1*time.Second), socks5.ClientWithIOTimeout(2*time.Second))
+	cli := client.New(client.WithHandshakeTimeout(1*time.Second), client.WithIOTimeout(2*time.Second))
+	conn, err := cli.DialChain(ctx, chain, "", 2*time.Second)
 	require.NoError(t, err)
 	defer func(conn net.Conn) {
 		_ = conn.Close()
 	}(conn)
 
-	cli := socks5.NewClient(socks5.ClientWithHandshakeTimeout(1*time.Second), socks5.ClientWithIOTimeout(2*time.Second))
-	assoc, rep, err := cli.UDPAssociate(ctx, conn)
+	cli2 := client.New(client.WithHandshakeTimeout(1*time.Second), client.WithIOTimeout(2*time.Second))
+	assoc, rep, err := cli2.UDPAssociate(ctx, conn)
 	require.NoError(t, err)
 	require.NotZero(t, rep.BndAddr.Port)
 	defer func(assoc *client.UDPAssociation) {
