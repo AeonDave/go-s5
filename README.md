@@ -10,6 +10,7 @@ Contents
 - Quick Start
 - Authentication (NoAuth, User/Pass, mTLS)
 - Options (With... API)
+- Client API (CONNECT/BIND/UDP, Multi-hop)
 - Examples
   - Basic server
   - Username/password
@@ -19,6 +20,7 @@ Contents
   - Address rewriter
   - Middleware
   - Upstream chaining
+  - Client: multi-hop DialChain
   - Advanced BIND
   - Advanced UDP ASSOCIATE
 - Performance Notes
@@ -36,6 +38,7 @@ Features
 - Address rewriting: transform destination before dialing
 - Per‑command middleware and optional custom handlers
 - Flexible dialing: WithDial, WithDialAndRequest, WithDialer
+- First-class client with multi-hop chaining over a single stream (Handshake+CONNECT per hop)
 - TCP options: handshake timeout, TCP keep‑alive
 - BIND tuning: bind IP, accept timeout, peer validation mode
 - UDP ASSOCIATE: udp4/udp6 selection, FQDN handling, peer limits with idle GC, optional bind IP
@@ -68,6 +71,39 @@ func main() {
     log.Fatal(s.ListenAndServe("tcp", ":1080"))
 }
 ```
+
+Client API (CONNECT/BIND/UDP, Multi-hop)
+- Create a client, perform Handshake, then CONNECT/BIND/UDP as needed.
+- For multi-hop, use DialChain to build N hops over the same stream (Handshake+CONNECT per hop), then CONNECT to the final target.
+
+Single hop CONNECT example:
+```
+conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+cli := socks5.NewClient(socks5.ClientWithHandshakeTimeout(5*time.Second), socks5.ClientWithIOTimeout(5*time.Second))
+_, _ = cli.Handshake(ctx, conn, nil) // NoAuth
+dst, _ := socks5protocol.ParseAddrSpec("example.com:80")
+_, _ = cli.Connect(ctx, conn, dst)
+```
+
+Multi-hop DialChain (client-side chaining):
+```
+chain := []socks5.Hop{
+  { Address: "10.0.0.2:1080", Creds: &socks5.Credentials{Username:"alice", Password:"secret"} },
+  { Address: "hop3.example:1080", /* TLSConfig: myTLS */ },
+}
+conn, err := socks5.DialChain(ctx, chain, "example.org:443", 5*time.Second,
+  socks5.ClientWithHandshakeTimeout(5*time.Second),
+  socks5.ClientWithIOTimeout(5*time.Second),
+)
+if err != nil { /* handle */ }
+defer conn.Close()
+// conn now speaks to example.org:443 through 2 SOCKS hops over a single stream
+```
+
+Notes:
+- Per-hop creds/TLS are optional via Hop.{Creds,TLSConfig}.
+- DialChain respects ctx and client timeouts; set WithHandshakeTimeout/WithIOTimeout.
+- You can also call the method form: `cli.DialChain(ctx, chain, final, 5*time.Second)`.
 
 Authentication
 - NoAuth (default)
@@ -235,6 +271,15 @@ socks5 example.last 1080
 ```
 Run: `proxychains4 -q curl https://ifconfig.me`
 
+Client: multi-hop DialChain
+```
+chain := []socks5.Hop{{Address:"127.0.0.1:1080"}, {Address:"10.0.0.2:1080"}}
+conn, err := socks5.DialChain(ctx, chain, "ifconfig.me:443", 5*time.Second,
+  socks5.ClientWithHandshakeTimeout(5*time.Second),
+  socks5.ClientWithIOTimeout(5*time.Second),
+)
+```
+
 Advanced BIND options
 ```
 s := socks5.NewServer(
@@ -291,4 +336,61 @@ Testing
 Run the test suite:
 ```
 go test ./...
+```
+
+Client multi-hop DialChain and UDP/BIND examples
+
+Multi-hop DialChain
+```
+chain := []socks5.Hop{
+  { Address: "127.0.0.1:1080" },
+  { Address: "10.0.0.2:1080" },
+}
+conn, err := socks5.DialChain(ctx, chain, "ifconfig.me:443", 5*time.Second,
+  socks5.ClientWithHandshakeTimeout(5*time.Second),
+  socks5.ClientWithIOTimeout(5*time.Second),
+)
+if err != nil { /* handle */ }
+defer conn.Close()
+```
+
+Per-hop TLS and credentials
+```
+chain := []socks5.Hop{
+  { Address: "10.0.0.2:1080", Creds: &socks5.Credentials{Username: "alice", Password: "secret"} },
+  { Address: "hop3.example:1080", TLSConfig: &tls.Config{ServerName: "hop3.example", MinVersion: tls.VersionTLS12} },
+}
+conn, err := socks5.DialChain(ctx, chain, "example.org:443", 5*time.Second,
+  socks5.ClientWithHandshakeTimeout(5*time.Second),
+  socks5.ClientWithIOTimeout(5*time.Second),
+)
+```
+
+Notes:
+- Per-hop creds/TLS are optional via Hop.{Creds,TLSConfig}.
+- DialChain respects ctx and client timeouts; set ClientWithHandshakeTimeout/ClientWithIOTimeout.
+- Control the first-hop dial with ClientWithDialer (custom net.Dialer) or the dialTimeout argument.
+
+UDP and BIND on the last hop
+```
+// Build the TCP chain first
+// Pass empty finalTarget to stop at the last hop and speak to the SOCKS server
+conn, err := socks5.DialChain(ctx, chain, "", 5*time.Second,
+  socks5.ClientWithHandshakeTimeout(5*time.Second), socks5.ClientWithIOTimeout(5*time.Second))
+if err != nil { /* handle */ }
+defer conn.Close()
+
+cli := socks5.NewClient(socks5.ClientWithHandshakeTimeout(5*time.Second), socks5.ClientWithIOTimeout(5*time.Second))
+
+// UDP ASSOCIATE
+assoc, rep, err := cli.UDPAssociate(ctx, conn)
+if err != nil { /* handle */ }
+defer assoc.Close()
+dst := socks5protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999, AddrType: socks5protocol.ATYPIPv4}
+_, _ = assoc.WriteTo(dst, []byte("ping"))
+
+// BIND (two-step)
+peer := socks5protocol.AddrSpec{IP: net.ParseIP("0.0.0.0"), Port: 0, AddrType: socks5protocol.ATYPIPv4}
+first, second, err := cli.Bind(ctx, conn, peer)
+_ = first; _ = second // see bind.go for details
 ```

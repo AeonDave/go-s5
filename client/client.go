@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ type Client struct {
 	ioTimeout        time.Duration
 	methods          []byte
 	udpLocalAddr     *net.UDPAddr
+	dialer           ContextDialer
 }
 
 // New creates a new Client.
@@ -59,6 +61,15 @@ func WithMethods(methods []byte) Option {
 
 // WithUDPLocalAddr binds UDP ASSOCIATE to a specific local address.
 func WithUDPLocalAddr(addr *net.UDPAddr) Option { return func(c *Client) { c.udpLocalAddr = addr } }
+
+// ContextDialer is a minimal interface implemented by *net.Dialer and custom dialers.
+type ContextDialer interface {
+	DialContext(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// WithDialer sets a custom dialer used for the first TCP connection to the initial hop in DialChain.
+// If not set, a net.Dialer with the provided dialTimeout will be used.
+func WithDialer(d ContextDialer) Option { return func(c *Client) { c.dialer = d } }
 
 // Handshake performs the SOCKS5 method negotiation on the given connection.
 // It attempts User/Pass if creds is provided, otherwise NoAuth.
@@ -215,6 +226,95 @@ func (c *Client) Bind(ctx context.Context, conn net.Conn, expect protocol.AddrSp
 	}
 	second, err = c.BindWait(ctx, conn)
 	return
+}
+
+// Hop describes a single SOCKS5 hop in a multi-hop chain.
+// Address is the hop's SOCKS server address in "host:port" form.
+// Creds and TLSConfig are optional per-hop settings.
+type Hop struct {
+	Address   string
+	Creds     *Credentials
+	TLSConfig *tls.Config
+}
+
+// DialChain dials the first hop and builds a multi-hop chain over a single stream,
+// issuing CONNECT+Handshake for each subsequent hop, then CONNECT to the final target.
+// The chain must contain at least one Hop (the first SOCKS server).
+// dialTimeout controls the TCP dial to the first hop; per-request timeouts are controlled
+// by the client's options (WithHandshakeTimeout/WithIOTimeout).
+func (c *Client) DialChain(ctx context.Context, chain []Hop, finalTarget string, dialTimeout time.Duration) (net.Conn, error) {
+	if len(chain) == 0 {
+		return nil, errors.New("dialchain: empty chain")
+	}
+	// 1) TCP dial to first hop
+	to := dialTimeout
+	if to <= 0 {
+		to = 5 * time.Second
+	}
+	var dialCtx context.Context = ctx
+	// apply a local timeout for the initial dial if ctx has no deadline
+	if to > 0 {
+		if _, ok := ctx.Deadline(); !ok {
+			var cancel context.CancelFunc
+			dialCtx, cancel = context.WithTimeout(ctx, to)
+			defer cancel()
+		}
+	}
+	d := c.dialer
+	if d == nil {
+		d = &net.Dialer{Timeout: to}
+	}
+	conn, err := d.DialContext(dialCtx, "tcp", chain[0].Address)
+	if err != nil {
+		return nil, err
+	}
+	closeOnErr := func(e error) (net.Conn, error) { _ = conn.Close(); return nil, e }
+
+	// Optional TLS to first hop, then Handshake
+	if tc := chain[0].TLSConfig; tc != nil {
+		tconn := tls.Client(conn, tc)
+		if err := tconn.Handshake(); err != nil {
+			return closeOnErr(err)
+		}
+		conn = tconn
+	}
+	if _, err := c.Handshake(ctx, conn, chain[0].Creds); err != nil {
+		return closeOnErr(err)
+	}
+
+	// 2) Intermediate hops
+	for i := 1; i < len(chain); i++ {
+		next := chain[i]
+		dst, err := protocol.ParseAddrSpec(next.Address)
+		if err != nil {
+			return closeOnErr(err)
+		}
+		if _, err = c.Connect(ctx, conn, dst); err != nil {
+			return closeOnErr(err)
+		}
+		if next.TLSConfig != nil {
+			tconn := tls.Client(conn, next.TLSConfig)
+			if err := tconn.Handshake(); err != nil {
+				return closeOnErr(err)
+			}
+			conn = tconn
+		}
+		if _, err = c.Handshake(ctx, conn, next.Creds); err != nil {
+			return closeOnErr(err)
+		}
+	}
+
+	// 3) Final target CONNECT (optional): if finalTarget is empty, return positioned at last hop
+	if finalTarget != "" {
+		dst, err := protocol.ParseAddrSpec(finalTarget)
+		if err != nil {
+			return closeOnErr(err)
+		}
+		if _, err = c.Connect(ctx, conn, dst); err != nil {
+			return closeOnErr(err)
+		}
+	}
+	return conn, nil
 }
 
 // UDPAssociation represents an established UDP ASSOCIATE session.
