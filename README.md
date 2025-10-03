@@ -4,6 +4,10 @@ A minimal, fast, and extensible SOCKS5 lib written in Go.
 It implements the three primary commands from RFC 1928: CONNECT, BIND, and UDP ASSOCIATE. The library exposes clear extension points for authentication, authorization, DNS resolution, address rewriting, and per‑command middleware. It also includes pragmatic I/O optimizations for high throughput.
 
 [![CodeQL Advanced](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml/badge.svg)](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/AeonDave/go-s5)](https://goreportcard.com/report/github.com/AeonDave/go-s5)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/AeonDave/go-s5)
+![GitHub last commit](https://img.shields.io/github/last-commit/AeonDave/go-s5)
+![GitHub License](https://img.shields.io/github/license/AeonDave/go-s5)
 
 Contents
 - Overview
