@@ -189,7 +189,7 @@ func dialCmd(args []string) {
 	ctx2, cancel2 := ctxWithTimeout(*ioTO)
 	defer cancel2()
 	if _, err = cli.Connect(ctx2, conn, dst); err != nil {
-		log.Fatalf("connect: %v", err)
+		log.Fatalf("connect failed")
 	}
 
 	if *stdio {
