@@ -246,75 +246,115 @@ func (c *Client) DialChain(ctx context.Context, chain []Hop, finalTarget string,
 	if len(chain) == 0 {
 		return nil, errors.New("dialchain: empty chain")
 	}
-	// 1) TCP dial to first hop
+
+	conn, err := c.dialFirstHop(ctx, chain[0], dialTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	closeOnErr := func(e error) (net.Conn, error) {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		return nil, e
+	}
+
+	if len(chain) > 1 {
+		nextConn, err := c.extendChain(ctx, conn, chain[1:])
+		if err != nil {
+			conn = nextConn
+			return closeOnErr(err)
+		}
+		conn = nextConn
+	}
+
+	if finalTarget == "" {
+		return conn, nil
+	}
+
+	if err := c.connectFinalTarget(ctx, conn, finalTarget); err != nil {
+		return closeOnErr(err)
+	}
+	return conn, nil
+}
+
+func (c *Client) dialFirstHop(ctx context.Context, hop Hop, dialTimeout time.Duration) (net.Conn, error) {
 	to := dialTimeout
 	if to <= 0 {
 		to = 5 * time.Second
 	}
-	var dialCtx context.Context = ctx
-	// apply a local timeout for the initial dial if ctx has no deadline
+
+	dialCtx := ctx
+	var cancel context.CancelFunc
 	if to > 0 {
 		if _, ok := ctx.Deadline(); !ok {
-			var cancel context.CancelFunc
 			dialCtx, cancel = context.WithTimeout(ctx, to)
-			defer cancel()
 		}
 	}
+	if cancel != nil {
+		defer cancel()
+	}
+
 	d := c.dialer
 	if d == nil {
 		d = &net.Dialer{Timeout: to}
 	}
-	conn, err := d.DialContext(dialCtx, "tcp", chain[0].Address)
+	conn, err := d.DialContext(dialCtx, "tcp", hop.Address)
 	if err != nil {
 		return nil, err
 	}
-	closeOnErr := func(e error) (net.Conn, error) { _ = conn.Close(); return nil, e }
 
-	// Optional TLS to first hop, then Handshake
-	if tc := chain[0].TLSConfig; tc != nil {
-		tconn := tls.Client(conn, tc)
+	cleanup := func(e error) (net.Conn, error) {
+		_ = conn.Close()
+		return nil, e
+	}
+
+	if hop.TLSConfig != nil {
+		tconn := tls.Client(conn, hop.TLSConfig)
 		if err := tconn.Handshake(); err != nil {
-			return closeOnErr(err)
+			return cleanup(err)
 		}
 		conn = tconn
 	}
-	if _, err := c.Handshake(ctx, conn, chain[0].Creds); err != nil {
-		return closeOnErr(err)
+
+	if _, err := c.Handshake(ctx, conn, hop.Creds); err != nil {
+		return cleanup(err)
 	}
 
-	// 2) Intermediate hops
-	for i := 1; i < len(chain); i++ {
-		next := chain[i]
-		dst, err := protocol.ParseAddrSpec(next.Address)
-		if err != nil {
-			return closeOnErr(err)
-		}
-		if _, err = c.Connect(ctx, conn, dst); err != nil {
-			return closeOnErr(err)
-		}
-		if next.TLSConfig != nil {
-			tconn := tls.Client(conn, next.TLSConfig)
-			if err := tconn.Handshake(); err != nil {
-				return closeOnErr(err)
-			}
-			conn = tconn
-		}
-		if _, err = c.Handshake(ctx, conn, next.Creds); err != nil {
-			return closeOnErr(err)
-		}
-	}
-
-	// 3) Final target CONNECT (optional): if finalTarget is empty, return positioned at last hop
-	if finalTarget != "" {
-		dst, err := protocol.ParseAddrSpec(finalTarget)
-		if err != nil {
-			return closeOnErr(err)
-		}
-		if _, err = c.Connect(ctx, conn, dst); err != nil {
-			return closeOnErr(err)
-		}
-	}
 	return conn, nil
+}
+
+func (c *Client) extendChain(ctx context.Context, conn net.Conn, hops []Hop) (net.Conn, error) {
+	current := conn
+	for _, hop := range hops {
+		dst, err := protocol.ParseAddrSpec(hop.Address)
+		if err != nil {
+			return current, err
+		}
+		if _, err = c.Connect(ctx, current, dst); err != nil {
+			return current, err
+		}
+		if hop.TLSConfig != nil {
+			tconn := tls.Client(current, hop.TLSConfig)
+			if err := tconn.Handshake(); err != nil {
+				return current, err
+			}
+			current = tconn
+		}
+		if _, err = c.Handshake(ctx, current, hop.Creds); err != nil {
+			return current, err
+		}
+	}
+	return current, nil
+}
+
+func (c *Client) connectFinalTarget(ctx context.Context, conn net.Conn, finalTarget string) error {
+	dst, err := protocol.ParseAddrSpec(finalTarget)
+	if err != nil {
+		return err
+	}
+	_, err = c.Connect(ctx, conn, dst)
+	return err
 }
 
 // UDPAssociation represents an established UDP ASSOCIATE session.

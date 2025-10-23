@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,9 +14,9 @@ import (
 	"time"
 
 	"github.com/AeonDave/go-s5/auth"
-	client "github.com/AeonDave/go-s5/client"
+	"github.com/AeonDave/go-s5/client"
 	"github.com/AeonDave/go-s5/protocol"
-	server "github.com/AeonDave/go-s5/server"
+	"github.com/AeonDave/go-s5/server"
 )
 
 func usage() {
@@ -77,6 +78,36 @@ func parseDuration(s string) time.Duration {
 }
 
 func serverCmd(args []string) {
+	cfg := parseServerFlags(args)
+	opts, err := serverOptionsFromConfig(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	srv := server.New(opts...)
+	tlsCfg, err := tlsConfigFromFlags(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if tlsCfg != nil {
+		log.Fatalf("%v", srv.ListenAndServeTLS("tcp", cfg.listen, tlsCfg))
+		return
+	}
+	log.Fatalf("%v", srv.ListenAndServe("tcp", cfg.listen))
+}
+
+type serverFlags struct {
+	listen  string
+	user    string
+	pass    string
+	bindIP  string
+	hs      string
+	ka      string
+	tlsCert string
+	tlsKey  string
+	mtlsCA  string
+}
+
+func parseServerFlags(args []string) serverFlags {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	listen := fs.String("listen", ":1080", "listen address")
 	user := fs.String("user", "", "username for auth")
@@ -88,55 +119,66 @@ func serverCmd(args []string) {
 	tlsKey := fs.String("tls-key", "", "TLS key file")
 	mtlsCA := fs.String("mtls-ca", "", "client CA file for mTLS")
 	_ = fs.Parse(args)
-
-	var opts []server.Option
-	// Logger to stdout for visibility
-	opts = append(opts, server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))))
-	if *user != "" || *pass != "" {
-		opts = append(opts, server.WithCredential(auth.StaticCredentials{*user: *pass}))
+	return serverFlags{
+		listen:  *listen,
+		user:    *user,
+		pass:    *pass,
+		bindIP:  *bindIP,
+		hs:      *hs,
+		ka:      *ka,
+		tlsCert: *tlsCert,
+		tlsKey:  *tlsKey,
+		mtlsCA:  *mtlsCA,
 	}
-	if *bindIP != "" {
-		ip := net.ParseIP(*bindIP)
+}
+
+func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
+	var opts []server.Option
+	opts = append(opts, server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))))
+	if cfg.user != "" || cfg.pass != "" {
+		opts = append(opts, server.WithCredential(auth.StaticCredentials{cfg.user: cfg.pass}))
+	}
+	if cfg.bindIP != "" {
+		ip := net.ParseIP(cfg.bindIP)
 		if ip == nil {
-			log.Fatalf("invalid bind IP: %s", *bindIP)
+			return nil, fmt.Errorf("invalid bind IP: %s", cfg.bindIP)
 		}
 		opts = append(opts, server.WithBindIP(ip))
 	}
-	if d := parseDuration(*hs); d > 0 {
+	if d := parseDuration(cfg.hs); d > 0 {
 		opts = append(opts, server.WithHandshakeTimeout(d))
 	}
-	if d := parseDuration(*ka); d > 0 {
+	if d := parseDuration(cfg.ka); d > 0 {
 		opts = append(opts, server.WithTCPKeepAlive(d))
 	}
+	return opts, nil
+}
 
-	s := server.New(opts...)
-
-	// TLS handling
-	if *tlsCert != "" || *tlsKey != "" || *mtlsCA != "" {
-		if *tlsCert == "" || *tlsKey == "" {
-			log.Fatal("-tls-cert and -tls-key are required together")
-		}
-		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
-		if err != nil {
-			log.Fatalf("load TLS cert/key: %v", err)
-		}
-		cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
-		if *mtlsCA != "" {
-			caPEM, err := os.ReadFile(*mtlsCA)
-			if err != nil {
-				log.Fatalf("read mTLS CA: %v", err)
-			}
-			pool := x509.NewCertPool()
-			if !pool.AppendCertsFromPEM(caPEM) {
-				log.Fatal("parse mTLS CA failed")
-			}
-			cfg.ClientAuth = tls.RequireAndVerifyClientCert
-			cfg.ClientCAs = pool
-		}
-		log.Fatalf("%v", s.ListenAndServeTLS("tcp", *listen, cfg))
-		return
+func tlsConfigFromFlags(cfg serverFlags) (*tls.Config, error) {
+	if cfg.tlsCert == "" && cfg.tlsKey == "" && cfg.mtlsCA == "" {
+		return nil, nil
 	}
-	log.Fatalf("%v", s.ListenAndServe("tcp", *listen))
+	if cfg.tlsCert == "" || cfg.tlsKey == "" {
+		return nil, errors.New("-tls-cert and -tls-key are required together")
+	}
+	cert, err := tls.LoadX509KeyPair(cfg.tlsCert, cfg.tlsKey)
+	if err != nil {
+		return nil, fmt.Errorf("load TLS cert/key: %w", err)
+	}
+	cfgTLS := &tls.Config{Certificates: []tls.Certificate{cert}}
+	if cfg.mtlsCA != "" {
+		caPEM, err := os.ReadFile(cfg.mtlsCA)
+		if err != nil {
+			return nil, fmt.Errorf("read mTLS CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, errors.New("parse mTLS CA failed")
+		}
+		cfgTLS.ClientAuth = tls.RequireAndVerifyClientCert
+		cfgTLS.ClientCAs = pool
+	}
+	return cfgTLS, nil
 }
 
 func dialCmd(args []string) {
