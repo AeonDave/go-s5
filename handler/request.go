@@ -15,6 +15,8 @@ type AddressRewriter interface {
 
 type Request struct {
 	protocol.Request
+	Context     context.Context
+	Metadata    map[string]string
 	AuthContext *auth.AContext
 	LocalAddr   net.Addr
 	RemoteAddr  net.Addr

@@ -49,8 +49,9 @@ Features
 - TCP options: handshake timeout, TCP keep‑alive
 - BIND tuning: bind IP, accept timeout, peer validation mode
 - UDP ASSOCIATE: udp4/udp6 selection, FQDN handling, peer limits with idle GC, optional bind IP
-- I/O performance: buffer pool, fast‑paths, half‑close, duplex proxy
+- I/O performance: buffer pool, fast-paths, half-close, duplex proxy
 - Logging and goroutine pool (GPool) integration
+- Graceful shutdown hooks: ServeContext, per-connection contexts/metadata, and ConnState callbacks
 
 Install
 - Go 1.24+
@@ -106,6 +107,8 @@ func main() {
     log.Fatal(s.ListenAndServe("tcp", ":1080"))
 }
 ```
+
+Need graceful shutdown? Use `ServeContext` instead of `ListenAndServe` and cancel the context when it is time to stop; every accepted connection inherits (and can derive from) that context so dialers, middleware, and custom handlers observe cancellation immediately.
 
 Client API (CONNECT/BIND/UDP, Multi-hop)
 - Create a client, perform Handshake, then CONNECT/BIND/UDP as needed.
@@ -167,6 +170,11 @@ Options (With... API)
   - `WithHandshakeTimeout(time.Duration)`
   - `WithTCPKeepAlive(time.Duration)`
   - `WithBindIP(net.IP)`
+- Connection lifecycle & metadata
+  - `WithBaseContext(func(net.Listener) context.Context)`
+  - `WithConnContext(func(context.Context, net.Conn) context.Context)`
+  - `WithConnState(func(net.Conn, server.ConnState))`
+  - `WithConnMetadata(func(net.Conn) map[string]string)`
 - BIND
   - `WithBindAcceptTimeout(time.Duration)`
   - `WithBindPeerCheckIPOnly(bool)`
@@ -175,6 +183,27 @@ Options (With... API)
   - `WithUDPAssociateLimits(maxPeers int, idleTimeout time.Duration)`
 - Infra
   - `WithGPool(GPool)`, `WithLogger(Logger)`, `WithBufferPool(buffer.BufPool)`
+
+### Connection context & metadata
+
+`Server.ServeContext(ctx, listener)` binds the provided context to the accept loop and every connection derived from it. Combine it with `WithConnContext` to attach request-scoped values, `WithConnMetadata` to surface immutable attributes on `handler.Request.Metadata`, and `WithConnState` to observe lifecycle transitions.
+
+`handler.Request` now exposes the derived `Context` and the optional `Metadata` map so custom middleware, dialers, and handlers can consume the same data without wrapping `net.Conn`.
+
+```go
+ctx, cancel := context.WithCancel(context.Background())
+srv := socks5.New(
+    server.WithConnContext(func(ctx context.Context, conn net.Conn) context.Context {
+        return context.WithValue(ctx, ctxKey{}, selectNode(conn))
+    }),
+    server.WithConnMetadata(func(conn net.Conn) map[string]string {
+        return map[string]string{"session_id": shortID(conn)}
+    }),
+)
+go srv.ServeContext(ctx, listener)
+// ... later
+cancel() // drains every connection
+```
 
 Examples
 Basic server

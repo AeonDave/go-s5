@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/AeonDave/go-s5/auth"
@@ -25,6 +26,14 @@ import (
 type GPool interface {
 	Submit(f func()) error
 }
+
+type ConnState int
+
+const (
+	StateNew ConnState = iota
+	StateActive
+	StateClosed
+)
 
 type Server struct {
 	authMethods                   []auth.Authenticator
@@ -52,6 +61,10 @@ type Server struct {
 	dialer                        *net.Dialer
 	udpMaxPeers                   int
 	udpIdleTimeout                time.Duration
+	baseContext                   func(net.Listener) context.Context
+	connContext                   func(ctx context.Context, conn net.Conn) context.Context
+	connStateHook                 func(net.Conn, ConnState)
+	connMetadata                  func(net.Conn) map[string]string
 }
 
 func New(opts ...Option) *Server {
@@ -83,7 +96,7 @@ func (sf *Server) ListenAndServe(network, addr string) error {
 	if err != nil {
 		return err
 	}
-	return sf.Serve(l)
+	return sf.ServeContext(context.Background(), l)
 }
 
 func (sf *Server) ListenAndServeTLS(network, addr string, c *tls.Config) error {
@@ -91,22 +104,49 @@ func (sf *Server) ListenAndServeTLS(network, addr string, c *tls.Config) error {
 	if err != nil {
 		return err
 	}
-	return sf.Serve(l)
+	return sf.ServeContext(context.Background(), l)
 }
 
 func (sf *Server) Serve(l net.Listener) error {
-	defer func(l net.Listener) { _ = l.Close() }(l)
+	return sf.ServeContext(context.Background(), l)
+}
+
+// ServeContext serves SOCKS5 on l until ctx is done or an unrecoverable error occurs.
+func (sf *Server) ServeContext(ctx context.Context, l net.Listener) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sf.baseContext != nil {
+		if base := sf.baseContext(l); base != nil {
+			ctx = base
+		}
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var closeOnce sync.Once
+	closeListener := func() { closeOnce.Do(func() { _ = l.Close() }) }
+	defer closeListener()
+	go func() {
+		<-ctx.Done()
+		closeListener()
+	}()
 	var tempDelay time.Duration
 	for {
 		conn, err := sf.acceptWithBackoff(l, &tempDelay)
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return err
 		}
 		if conn == nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			continue
 		}
 		tempDelay = 0
-		sf.onAcceptedConn(conn)
+		sf.onAcceptedConn(ctx, conn)
 	}
 }
 
@@ -131,22 +171,48 @@ func (sf *Server) acceptWithBackoff(l net.Listener, tempDelay *time.Duration) (n
 	return nil, err
 }
 
-func (sf *Server) onAcceptedConn(conn net.Conn) {
+func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	if sf.tcpKeepAlivePeriod > 0 {
 		if tcp, ok := conn.(*net.TCPConn); ok {
 			_ = tcp.SetKeepAlive(true)
 			_ = tcp.SetKeepAlivePeriod(sf.tcpKeepAlivePeriod)
 		}
 	}
+	connCtx := sf.decorateConnContext(ctx, conn)
+	cancelableCtx, cancel := context.WithCancel(connCtx)
+	sf.trackConnState(conn, StateNew)
 	sf.goFunc(func() {
-		if err := sf.ServeConn(conn); err != nil {
+		defer cancel()
+		sf.trackConnState(conn, StateActive)
+		if err := sf.ServeConnContext(cancelableCtx, conn); err != nil {
 			sf.logger.Errorf("server: %v", err)
 		}
+		sf.trackConnState(conn, StateClosed)
 	})
 }
 
 func (sf *Server) ServeConn(conn net.Conn) error {
-	defer func(conn net.Conn) { _ = conn.Close() }(conn)
+	return sf.ServeConnContext(context.Background(), conn)
+}
+
+// ServeConnContext is like ServeConn but binds the provided context to the connection lifecycle.
+func (sf *Server) ServeConnContext(ctx context.Context, conn net.Conn) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-done:
+		}
+	}()
+	defer func() {
+		close(done)
+		_ = conn.Close()
+	}()
+
 	sf.applyHandshakeDeadline(conn)
 	if err := sf.tlsHandshakeIfAny(conn); err != nil {
 		return err
@@ -185,7 +251,9 @@ func (sf *Server) ServeConn(conn net.Conn) error {
 	request.AuthContext = authContext
 	request.LocalAddr = conn.LocalAddr()
 	request.RemoteAddr = conn.RemoteAddr()
-	return sf.handleRequest(conn, request)
+	request.Context = ctx
+	request.Metadata = sf.buildMetadata(conn)
+	return sf.handleRequest(ctx, conn, request)
 }
 
 func (sf *Server) applyHandshakeDeadline(conn net.Conn) {
@@ -264,4 +332,37 @@ func (sf *Server) goFunc(f func()) {
 	if sf.gPool == nil || sf.gPool.Submit(f) != nil {
 		go f()
 	}
+}
+
+func (sf *Server) decorateConnContext(ctx context.Context, conn net.Conn) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sf.connContext != nil {
+		if derived := sf.connContext(ctx, conn); derived != nil {
+			ctx = derived
+		}
+	}
+	return ctx
+}
+
+func (sf *Server) trackConnState(conn net.Conn, state ConnState) {
+	if sf.connStateHook != nil {
+		sf.connStateHook(conn, state)
+	}
+}
+
+func (sf *Server) buildMetadata(conn net.Conn) map[string]string {
+	if sf.connMetadata == nil {
+		return nil
+	}
+	raw := sf.connMetadata(conn)
+	if len(raw) == 0 {
+		return nil
+	}
+	clone := make(map[string]string, len(raw))
+	for k, v := range raw {
+		clone[k] = v
+	}
+	return clone
 }

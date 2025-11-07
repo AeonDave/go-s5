@@ -10,16 +10,30 @@ import (
 	"github.com/AeonDave/go-s5/internal/protocol"
 )
 
-func (sf *Server) handleRequest(write io.Writer, req *handler.Request) error {
+func (sf *Server) handleRequest(parent context.Context, write io.Writer, req *handler.Request) error {
 	var err error
-
-	ctx := context.Background()
+	ctx := parent
+	if req.Context != nil {
+		ctx = req.Context
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	setCtx := func(next context.Context) {
+		if next != nil {
+			ctx = next
+			req.Context = ctx
+		}
+	}
+	req.Context = ctx
 
 	// Work on a copy to avoid mutating RawDestAddr
 	destCopy := *req.RawDestAddr
 	if destCopy.FQDN != "" {
 		var ip net.IP
-		ctx, ip, err = sf.resolver.Resolve(ctx, destCopy.FQDN)
+		var resolveCtx context.Context
+		resolveCtx, ip, err = sf.resolver.Resolve(ctx, destCopy.FQDN)
+		setCtx(resolveCtx)
 		if err != nil {
 			if err := SendReply(write, protocol.RepHostUnreachable, nil); err != nil {
 				return fmt.Errorf(fmtFailedSendReply, err)
@@ -31,11 +45,17 @@ func (sf *Server) handleRequest(write io.Writer, req *handler.Request) error {
 
 	req.DestAddr = &destCopy
 	if sf.rewriter != nil {
-		ctx, req.DestAddr = sf.rewriter.Rewrite(ctx, req)
+		rewriterCtx, rewritten := sf.rewriter.Rewrite(ctx, req)
+		setCtx(rewriterCtx)
+		if rewritten != nil {
+			req.DestAddr = rewritten
+		}
 	}
 
+	var allowCtx context.Context
 	var ok bool
-	ctx, ok = sf.rules.Allow(ctx, req)
+	allowCtx, ok = sf.rules.Allow(ctx, req)
+	setCtx(allowCtx)
 	if !ok {
 		if err := SendReply(write, protocol.RepRuleFailure, nil); err != nil {
 			return fmt.Errorf(fmtFailedSendReply, err)
