@@ -18,6 +18,7 @@ Contents
 - Authentication (NoAuth, User/Pass, mTLS)
 - Options (With... API)
 - Client API (CONNECT/BIND/UDP, Multi-hop)
+- Client helper packages (TCP/UDP utilities)
 - Examples
   - Basic server
   - Username/password
@@ -140,6 +141,63 @@ Notes:
 - Per-hop creds/TLS are optional via Hop.{Creds,TLSConfig}.
 - DialChain respects ctx and client timeouts; set WithHandshakeTimeout/WithIOTimeout.
 - You can also call the method form: `cli.DialChain(ctx, chain, final, 5*time.Second)`.
+
+Client helper packages (TCP/UDP utilities)
+- The root `client` package keeps backwards compatibility helpers while `client/tcp`
+  and `client/udp` provide focused APIs for stream and datagram workloads.
+- Both helpers accept standard `context.Context` deadlines and surface
+  convenience wrappers so callers do not need to hand-roll read/write loops.
+
+### TCP stream helper
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+cli := client.New()
+_, _ = cli.Handshake(ctx, conn, nil)
+dst, _ := socks5protocol.ParseAddrSpec("example.org:443")
+stream, _, _ := cli.ConnectStream(ctx, conn, dst)
+defer stream.Close()
+
+// Set deadlines before exchanging data to avoid hanging sockets.
+_ = stream.SetDeadline(time.Now().Add(5 * time.Second))
+_, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
+buf := make([]byte, 1024)
+n, _ := stream.Read(buf)
+fmt.Printf("response: %s\n", buf[:n])
+```
+
+- `client/tcp.Stream.Relay` proxies two `net.Conn` instances using your context to
+  enforce cancellation and deadline propagation.
+- Security tip: when you promote the SOCKS hop to TLS use a hardened
+  `tls.Config` with `MinVersion: tls.VersionTLS12` (or newer) and populate
+  `ServerName` so certificate verification succeeds.
+
+### UDP association helper
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+cli := client.New()
+_, _ = cli.Handshake(ctx, conn, nil)
+assoc, _, _ := cli.UDPAssociate(ctx, conn)
+defer assoc.Close()
+
+pc := assoc.PacketConn()
+target, _ := client.ParseUDPAddr("198.51.100.42:12345")
+_, _ = pc.WriteTo([]byte("payload"), target)
+
+buf := make([]byte, 1500)
+n, addr, _ := pc.ReadFrom(buf)
+fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
+```
+
+- Use `Association.RelayAddress()` if you need the relay endpoint for firewall
+  rules or observability, without risking in-place mutation.
+- The helper preserves datagram boundaries and accepts both SOCKS-aware
+  addresses (`client.UDPAddr`) and native `*net.UDPAddr` values.
 
 Authentication
 - NoAuth (default)
@@ -442,6 +500,13 @@ if err != nil { /* handle */ }
 defer assoc.Close()
 dst := socks5protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999, AddrType: socks5protocol.ATYPIPv4}
 _, _ = assoc.WriteTo(dst, []byte("ping"))
+
+// CONNECT helper with TCP stream utilities
+stream, _, err := cli.ConnectStream(ctx, conn, socks5protocol.AddrSpec{FQDN: "example.org", Port: 443, AddrType: socks5protocol.ATYPDomain})
+if err != nil { /* handle */ }
+defer stream.Close()
+_, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
+
 
 // BIND (two-step)
 peer := socks5protocol.AddrSpec{IP: net.ParseIP("0.0.0.0"), Port: 0, AddrType: socks5protocol.ATYPIPv4}
