@@ -199,6 +199,36 @@ fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
 - The helper preserves datagram boundaries and accepts both SOCKS-aware
   addresses (`client.UDPAddr`) and native `*net.UDPAddr` values.
 
+### Production checklist
+
+Operational readiness:
+
+- Run the SOCKS listener behind TLS when crossing untrusted networks. The
+  client helpers accept the same `tls.Config` tuning you would expect from
+  HTTPS clients—set `MinVersion` to at least TLS 1.2 and populate
+  `ServerName` so certificate verification succeeds.
+- Configure client helpers with explicit deadlines (`context.Context` or
+  `WithHandshakeTimeout`/`WithIOTimeout`) and, for long-lived tunnels, enable
+  UDP keep-alives via `client.WithUDPKeepAlive` to keep stateful firewalls from
+  reclaiming the association.
+- Decide on logging verbosity up front. Use `client.NewStdLogger` combined with
+  `client.WithLogger` to surface helper diagnostics, or `client.NewSilentLogger`
+  to suppress them entirely when running inside higher-level frameworks.
+- Monitor relay health using the TCP helper’s `Relay` return values: wrap calls
+  and feed errors into your observability pipeline so asymmetric failures do
+  not go unnoticed.
+
+Security hardening:
+
+- Prefer mutually authenticated TLS (mTLS) for administrative or
+  intra-datacenter deployments. The README’s TLS section shows how to inject a
+  CA pool and enable `tls.RequireAndVerifyClientCert`.
+- Rotate credentials regularly and leverage the rules engine to scope
+  high-privilege accounts to the minimum set of destinations.
+- The UDP helper intentionally ignores fragmented datagrams (`FRAG != 0`). This
+  is documented under Compatibility; plan accordingly if your workload requires
+  oversized datagrams.
+
 Authentication
 - NoAuth (default)
   - Enabled when no credentials are provided.

@@ -28,17 +28,20 @@ type Logger interface {
 
 // Config controls the construction of a logger implementation.
 type Config struct {
-	Base  *log.Logger
-	Level Level
+	Base     *log.Logger
+	Level    Level
+	LevelSet bool
 }
 
 // New constructs a logger from the provided configuration. When cfg.Base is
-// nil, a logger backed by io.Discard is created. The default level is
-// LevelError.
+// nil, a logger backed by io.Discard is created. The log level defaults to
+// LevelError unless a valid value is provided. Use LevelOff to silence output.
 func New(cfg Config) Logger {
-	lvl := cfg.Level
-	if lvl == 0 { // default to errors only when unset
-		lvl = LevelError
+	lvl := LevelError
+	if cfg.LevelSet {
+		lvl = normalizeLevel(cfg.Level)
+	} else if cfg.Level > LevelOff {
+		lvl = normalizeLevel(cfg.Level)
 	}
 	base := cfg.Base
 	if base == nil {
@@ -87,4 +90,13 @@ func (l *stdLogger) Infof(format string, args ...interface{}) {
 
 func (l *stdLogger) Errorf(format string, args ...interface{}) {
 	l.logf(LevelError, "[error] ", format, args...)
+}
+
+func normalizeLevel(lvl Level) Level {
+	switch lvl {
+	case LevelOff, LevelError, LevelInfo, LevelDebug:
+		return lvl
+	default:
+		return LevelError
+	}
 }
