@@ -8,6 +8,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/AeonDave/go-s5/client/internal/logging"
 	ctcp "github.com/AeonDave/go-s5/client/tcp"
 	cudp "github.com/AeonDave/go-s5/client/udp"
 	"github.com/AeonDave/go-s5/protocol"
@@ -32,6 +33,9 @@ type Client struct {
 	methods          []byte
 	udpLocalAddr     *net.UDPAddr
 	dialer           ContextDialer
+	logger           logging.Logger
+	udpKeepAliveIntv time.Duration
+	udpKeepAliveData []byte
 }
 
 // New creates a new Client.
@@ -41,6 +45,8 @@ func New(opts ...Option) *Client {
 		ioTimeout:        10 * time.Second,
 		methods:          nil,
 		udpLocalAddr:     &net.UDPAddr{IP: net.IPv4zero, Port: 0},
+		logger:           logging.NewNop(),
+		udpKeepAliveData: []byte{0},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -62,6 +68,32 @@ func WithMethods(methods []byte) Option {
 
 // WithUDPLocalAddr binds UDP ASSOCIATE to a specific local address.
 func WithUDPLocalAddr(addr *net.UDPAddr) Option { return func(c *Client) { c.udpLocalAddr = addr } }
+
+// WithLogger installs a custom logger for helper packages. Passing nil silences
+// all helper output.
+func WithLogger(l Logger) Option {
+	return func(c *Client) {
+		if l == nil {
+			c.logger = logging.NewNop()
+			return
+		}
+		c.logger = l
+	}
+}
+
+// WithUDPKeepAlive configures automatic keep-alive datagrams for UDP
+// associations. When interval is non-positive the keep alive loop is disabled.
+// payload may be nil, in which case a single zero byte is used.
+func WithUDPKeepAlive(interval time.Duration, payload []byte) Option {
+	return func(c *Client) {
+		c.udpKeepAliveIntv = interval
+		if len(payload) == 0 {
+			c.udpKeepAliveData = []byte{0}
+			return
+		}
+		c.udpKeepAliveData = append([]byte(nil), payload...)
+	}
+}
 
 // ContextDialer is a minimal interface implemented by *net.Dialer and custom dialers.
 type ContextDialer interface {
@@ -172,7 +204,7 @@ func (c *Client) ConnectStream(ctx context.Context, conn net.Conn, dst protocol.
 	if err != nil {
 		return nil, rep, err
 	}
-	stream, serr := ctcp.NewStream(conn)
+	stream, serr := ctcp.NewStream(conn, ctcp.WithLogger(c.logger))
 	if serr != nil {
 		return nil, rep, serr
 	}
@@ -448,7 +480,10 @@ func (c *Client) UDPAssociate(ctx context.Context, conn net.Conn) (*UDPAssociati
 	}
 	relay := &net.UDPAddr{IP: relayIP, Port: rep.BndAddr.Port}
 
-	assoc, aerr := cudp.NewAssociation(pc, relay)
+	assoc, aerr := cudp.NewAssociation(pc, relay,
+		cudp.WithLogger(c.logger),
+		cudp.WithKeepAlive(c.udpKeepAliveIntv, c.udpKeepAliveData),
+	)
 	if aerr != nil {
 		_ = pc.Close()
 		return nil, rep, aerr

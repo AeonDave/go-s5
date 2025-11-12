@@ -4,12 +4,15 @@
 package udp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
+	"github.com/AeonDave/go-s5/client/internal/logging"
 	"github.com/AeonDave/go-s5/protocol"
 )
 
@@ -23,29 +26,111 @@ type Association struct {
 	Conn *net.UDPConn
 	// RelayAddr is the UDP endpoint advertised by the SOCKS server.
 	RelayAddr *net.UDPAddr
+	logger    logging.Logger
+
+	scratchPool *sync.Pool
+
+	keepAliveMu       sync.Mutex
+	keepAliveInterval time.Duration
+	keepAlivePayload  []byte
+	keepAliveCancel   context.CancelFunc
+	keepAliveDone     chan struct{}
 }
 
 const datagramOverhead = 4 + 1 + 255 + 2 // RSV + FRAG + domain length + port
+const (
+	defaultScratchSize    = 2048 + datagramOverhead
+	maxPooledScratchBytes = 64*1024 + datagramOverhead
+)
+
+// Option configures a UDP association helper.
+type Option func(*Association)
 
 // NewAssociation constructs an Association from the negotiated UDP socket and
 // relay address.
-func NewAssociation(conn *net.UDPConn, relay *net.UDPAddr) (*Association, error) {
+func NewAssociation(conn *net.UDPConn, relay *net.UDPAddr, opts ...Option) (*Association, error) {
 	if conn == nil {
 		return nil, errors.New("nil UDP connection")
 	}
 	if relay == nil {
 		return nil, errors.New("nil relay address")
 	}
-	return &Association{Conn: conn, RelayAddr: relay}, nil
+	a := &Association{
+		Conn:             conn,
+		RelayAddr:        relay,
+		logger:           logging.NewNop(),
+		keepAlivePayload: []byte{0},
+		scratchPool:      &sync.Pool{New: func() any { return make([]byte, defaultScratchSize) }},
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(a)
+		}
+	}
+	if a.scratchPool == nil {
+		a.scratchPool = &sync.Pool{New: func() any { return make([]byte, defaultScratchSize) }}
+	}
+	if a.logger == nil {
+		a.logger = logging.NewNop()
+	}
+	a.keepAliveMu.Lock()
+	if a.keepAliveInterval > 0 {
+		a.startKeepAliveLocked()
+	}
+	a.keepAliveMu.Unlock()
+	return a, nil
+}
+
+// WithLogger installs a logger used for keep-alive diagnostics. Passing nil
+// silences all output.
+func WithLogger(l logging.Logger) Option {
+	return func(a *Association) {
+		if l == nil {
+			a.logger = logging.NewNop()
+			return
+		}
+		a.logger = l
+	}
+}
+
+// WithKeepAlive enables periodic keep-alive datagrams using the provided
+// interval and payload. When interval is non-positive, keep-alives remain
+// disabled. Payload defaults to a single zero byte when nil or empty.
+func WithKeepAlive(interval time.Duration, payload []byte) Option {
+	return func(a *Association) {
+		a.keepAliveInterval = interval
+		if len(payload) == 0 {
+			a.keepAlivePayload = []byte{0}
+			return
+		}
+		a.keepAlivePayload = append([]byte(nil), payload...)
+	}
+}
+
+// WithScratchPool overrides the buffer pool used to stage datagrams before
+// parsing. It is primarily intended for tests that want to observe allocation
+// behavior.
+func WithScratchPool(pool *sync.Pool) Option {
+	return func(a *Association) {
+		if pool != nil {
+			a.scratchPool = pool
+		}
+	}
 }
 
 // Close shuts down the underlying UDP socket. It does not touch the control
 // TCP connection that negotiated the association.
 func (a *Association) Close() error {
-	if a == nil || a.Conn == nil {
+	if a == nil {
 		return nil
 	}
-	return a.Conn.Close()
+	conn := a.Conn
+	a.Conn = nil
+	a.stopKeepAlive()
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
 }
 
 // RelayAddress returns a defensive copy of the relay address advertised by the
@@ -120,13 +205,15 @@ func (a *Association) ReadFrom(buf []byte) (n int, dst protocol.AddrSpec, from *
 		err = errors.New("invalid UDP association")
 		return
 	}
-	tmp := make([]byte, len(buf)+datagramOverhead)
+	scratch := a.borrowScratch(len(buf) + datagramOverhead)
+	defer a.releaseScratch(scratch)
+	readArea := scratch[:cap(scratch)]
 	var rn int
-	rn, from, err = a.Conn.ReadFromUDP(tmp)
+	rn, from, err = a.Conn.ReadFromUDP(readArea)
 	if err != nil {
 		return
 	}
-	dg, perr := protocol.ParseDatagram(tmp[:rn])
+	dg, perr := protocol.ParseDatagram(readArea[:rn])
 	if perr != nil {
 		err = perr
 		return
@@ -260,4 +347,127 @@ func addrSpecFromNetAddr(addr net.Addr) (protocol.AddrSpec, error) {
 	default:
 		return protocol.AddrSpec{}, fmt.Errorf("unsupported address type %T", addr)
 	}
+}
+
+func (a *Association) borrowScratch(size int) []byte {
+	if size < defaultScratchSize {
+		size = defaultScratchSize
+	}
+	if a.scratchPool != nil {
+		if buf, ok := a.scratchPool.Get().([]byte); ok && buf != nil {
+			if cap(buf) >= size {
+				return buf[:size]
+			}
+			a.scratchPool.Put(buf)
+		}
+	}
+	return make([]byte, size)
+}
+
+func (a *Association) releaseScratch(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) > maxPooledScratchBytes {
+		return
+	}
+	if a.scratchPool != nil {
+		a.scratchPool.Put(buf[:cap(buf)])
+	}
+}
+
+// ConfigureKeepAlive updates the keep-alive settings for the association and
+// restarts the background loop if required.
+func (a *Association) ConfigureKeepAlive(interval time.Duration, payload []byte) {
+	if a == nil {
+		return
+	}
+	a.keepAliveMu.Lock()
+	a.keepAliveInterval = interval
+	if len(payload) == 0 {
+		a.keepAlivePayload = []byte{0}
+	} else {
+		a.keepAlivePayload = append([]byte(nil), payload...)
+	}
+	cancel, done := a.stopKeepAliveLocked()
+	shouldStart := a.keepAliveInterval > 0
+	a.keepAliveMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+
+	if shouldStart {
+		a.keepAliveMu.Lock()
+		a.startKeepAliveLocked()
+		a.keepAliveMu.Unlock()
+	}
+}
+
+func (a *Association) stopKeepAlive() {
+	if a == nil {
+		return
+	}
+	a.keepAliveMu.Lock()
+	cancel, done := a.stopKeepAliveLocked()
+	a.keepAliveMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if done != nil {
+		<-done
+	}
+}
+
+func (a *Association) stopKeepAliveLocked() (context.CancelFunc, chan struct{}) {
+	cancel := a.keepAliveCancel
+	done := a.keepAliveDone
+	a.keepAliveCancel = nil
+	a.keepAliveDone = nil
+	return cancel, done
+}
+
+func (a *Association) startKeepAliveLocked() {
+	if a.keepAliveInterval <= 0 || a.Conn == nil || a.RelayAddr == nil {
+		return
+	}
+	if a.keepAliveCancel != nil {
+		return
+	}
+	payload := append([]byte(nil), a.keepAlivePayload...)
+	if len(payload) == 0 {
+		payload = []byte{0}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	a.keepAliveCancel = cancel
+	a.keepAliveDone = done
+	conn := a.Conn
+	relay := a.RelayAddr
+	interval := a.keepAliveInterval
+	logger := a.logger
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if conn == nil || relay == nil {
+					continue
+				}
+				if _, err := conn.WriteToUDP(payload, relay); err != nil {
+					logger.Errorf("udp keepalive: send failed: %v", err)
+				} else {
+					logger.Debugf("udp keepalive: sent %d byte(s) to %s", len(payload), relay)
+				}
+			}
+		}
+	}()
 }

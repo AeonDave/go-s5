@@ -8,21 +8,79 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
+
+	"github.com/AeonDave/go-s5/client/internal/logging"
 )
 
 // Stream wraps a TCP connection negotiated through a SOCKS proxy and offers
 // convenience helpers for common stream-oriented operations.
 type Stream struct {
-	conn net.Conn
+	conn                 net.Conn
+	logger               logging.Logger
+	relayBufPool         sync.Pool
+	relayActivityTimeout time.Duration
 }
 
+// Option configures the Stream helper.
+type Option func(*Stream)
+
+const (
+	defaultRelayBufferSize   = 32 * 1024
+	defaultRelayActivityIdle = 5 * time.Second
+)
+
 // NewStream validates and wraps conn into a Stream helper.
-func NewStream(conn net.Conn) (*Stream, error) {
+func NewStream(conn net.Conn, opts ...Option) (*Stream, error) {
 	if conn == nil {
 		return nil, errors.New("nil TCP connection")
 	}
-	return &Stream{conn: conn}, nil
+	s := &Stream{
+		conn:                 conn,
+		logger:               logging.NewNop(),
+		relayActivityTimeout: defaultRelayActivityIdle,
+	}
+	s.relayBufPool.New = func() any { return make([]byte, defaultRelayBufferSize) }
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	if s.logger == nil {
+		s.logger = logging.NewNop()
+	}
+	return s, nil
+}
+
+// WithLogger installs a logger for relay lifecycle events. Passing nil silences
+// all logging.
+func WithLogger(l logging.Logger) Option {
+	return func(s *Stream) {
+		if l == nil {
+			s.logger = logging.NewNop()
+			return
+		}
+		s.logger = l
+	}
+}
+
+// WithRelayBufferSize overrides the copy buffer used by Relay. Size must be
+// positive; otherwise the default is used.
+func WithRelayBufferSize(size int) Option {
+	if size <= 0 {
+		size = defaultRelayBufferSize
+	}
+	return func(s *Stream) {
+		s.relayBufPool.New = func() any { return make([]byte, size) }
+	}
+}
+
+// WithRelayActivityTimeout overrides the idle timeout applied to reads and
+// writes while relaying. When set to zero or negative no deadlines are applied
+// beyond what the underlying connection already enforces.
+func WithRelayActivityTimeout(d time.Duration) Option {
+	return func(s *Stream) { s.relayActivityTimeout = d }
 }
 
 // Conn returns the underlying TCP connection.
@@ -165,23 +223,201 @@ func (s *Stream) Relay(ctx context.Context, peer net.Conn) error {
 		return errors.New("nil peer connection")
 	}
 
-	errCh := make(chan error, 2)
-	pipe := func(dst net.Conn, src net.Conn) {
-		_, err := io.Copy(dst, src)
-		errCh <- err
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	s.logger.Debugf("tcp relay: start %s <-> %s", safeAddr(s.conn.LocalAddr()), safeAddr(peer.RemoteAddr()))
+
+	results := make(chan relayResult, 2)
+	var interruptOnce sync.Once
+	interrupt := func(reason string) {
+		interruptOnce.Do(func() {
+			s.logger.Debugf("tcp relay: interrupt (%s)", reason)
+			now := time.Now()
+			_ = s.conn.SetDeadline(now)
+			_ = peer.SetDeadline(now)
+			closeHalf(peer, true)
+			closeHalf(peer, false)
+			closeHalf(s.conn, true)
+			closeHalf(s.conn, false)
+		})
 	}
 
-	go pipe(peer, s.conn)
-	go pipe(s.conn, peer)
+	go s.copyLoop(ctx, results, peer, s.conn, directionOutbound)
+	go s.copyLoop(ctx, results, s.conn, peer, directionInbound)
 
-	select {
-	case <-ctx.Done():
-		_ = s.conn.SetDeadline(time.Now())
-		_ = peer.SetDeadline(time.Now())
-		return ctx.Err()
-	case err := <-errCh:
-		_ = s.conn.SetDeadline(time.Now())
-		_ = peer.SetDeadline(time.Now())
-		return err
+	var fatal []error
+	parentCanceled := false
+
+	for completed := 0; completed < 2; {
+		select {
+		case <-parentCtx.Done():
+			if !parentCanceled {
+				parentCanceled = true
+				if err := parentCtx.Err(); err != nil {
+					fatal = append(fatal, err)
+					s.logger.Debugf("tcp relay: parent context done: %v", err)
+				}
+				interrupt("context cancellation")
+				cancel()
+			}
+		case res := <-results:
+			completed++
+			s.logRelayResult(res)
+			switch {
+			case res.err == nil:
+				// noop
+			case errors.Is(res.err, io.EOF):
+				// Normal closure for that direction.
+			case errors.Is(res.err, context.Canceled):
+				// ignore derived cancellation triggered by interrupting the loop
+			default:
+				fatal = append(fatal, res.err)
+				cancel()
+				interrupt(string(res.direction))
+			}
+		}
 	}
+
+	if len(fatal) == 0 {
+		if parentCanceled {
+			return parentCtx.Err()
+		}
+		return nil
+	}
+	if len(fatal) == 1 {
+		return fatal[0]
+	}
+	return errors.Join(fatal...)
+}
+
+type relayDirection string
+
+const (
+	directionOutbound relayDirection = "stream->peer"
+	directionInbound  relayDirection = "peer->stream"
+)
+
+type relayResult struct {
+	direction relayDirection
+	bytes     int64
+	err       error
+}
+
+func (s *Stream) copyLoop(ctx context.Context, results chan<- relayResult, dst net.Conn, src net.Conn, direction relayDirection) {
+	buf := s.borrowRelayBuffer()
+	defer s.releaseRelayBuffer(buf)
+
+	var total int64
+	for {
+		if err := s.applyReadDeadline(src); err != nil {
+			results <- relayResult{direction: direction, bytes: total, err: err}
+			return
+		}
+		n, err := src.Read(buf)
+		if n > 0 {
+			if err := s.applyWriteDeadline(dst); err != nil {
+				results <- relayResult{direction: direction, bytes: total, err: err}
+				return
+			}
+			wn, werr := dst.Write(buf[:n])
+			total += int64(wn)
+			if werr != nil {
+				results <- relayResult{direction: direction, bytes: total, err: werr}
+				return
+			}
+			if wn != n {
+				results <- relayResult{direction: direction, bytes: total, err: io.ErrShortWrite}
+				return
+			}
+		}
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				select {
+				case <-ctx.Done():
+					results <- relayResult{direction: direction, bytes: total, err: ctx.Err()}
+					return
+				default:
+					continue
+				}
+			}
+			results <- relayResult{direction: direction, bytes: total, err: err}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			results <- relayResult{direction: direction, bytes: total, err: ctx.Err()}
+			return
+		default:
+		}
+	}
+}
+
+func (s *Stream) applyReadDeadline(conn net.Conn) error {
+	if conn == nil || s.relayActivityTimeout <= 0 {
+		return nil
+	}
+	return conn.SetReadDeadline(time.Now().Add(s.relayActivityTimeout))
+}
+
+func (s *Stream) applyWriteDeadline(conn net.Conn) error {
+	if conn == nil || s.relayActivityTimeout <= 0 {
+		return nil
+	}
+	return conn.SetWriteDeadline(time.Now().Add(s.relayActivityTimeout))
+}
+
+func (s *Stream) borrowRelayBuffer() []byte {
+	if buf, ok := s.relayBufPool.Get().([]byte); ok && buf != nil {
+		return buf
+	}
+	if s.relayBufPool.New != nil {
+		if buf, ok := s.relayBufPool.New().([]byte); ok {
+			return buf
+		}
+	}
+	return make([]byte, defaultRelayBufferSize)
+}
+
+func (s *Stream) releaseRelayBuffer(buf []byte) {
+	if buf == nil {
+		return
+	}
+	s.relayBufPool.Put(buf)
+}
+
+func (s *Stream) logRelayResult(res relayResult) {
+	switch {
+	case res.err == nil:
+		s.logger.Debugf("tcp relay: %s transferred %d bytes", res.direction, res.bytes)
+	case errors.Is(res.err, io.EOF):
+		s.logger.Debugf("tcp relay: %s closed after %d bytes (EOF)", res.direction, res.bytes)
+	case errors.Is(res.err, context.Canceled):
+		s.logger.Debugf("tcp relay: %s canceled after %d bytes", res.direction, res.bytes)
+	default:
+		s.logger.Errorf("tcp relay: %s failed after %d bytes: %v", res.direction, res.bytes, res.err)
+	}
+}
+
+func closeHalf(conn net.Conn, write bool) {
+	if conn == nil {
+		return
+	}
+	if write {
+		if cw, ok := conn.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		}
+		return
+	}
+	if cr, ok := conn.(interface{ CloseRead() error }); ok {
+		_ = cr.CloseRead()
+	}
+}
+
+func safeAddr(addr net.Addr) string {
+	if addr == nil {
+		return "<nil>"
+	}
+	return addr.String()
 }
