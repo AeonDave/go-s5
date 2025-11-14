@@ -96,8 +96,13 @@ func TestServeContextCancellationPropagates(t *testing.T) {
 	defer cancel()
 
 	handlerDone := make(chan struct{}, 1)
+	handlerStarted := make(chan struct{}, 1)
 	srv := server.New(
 		server.WithConnectHandle(func(ctx context.Context, w io.Writer, _ *socks5_handler.Request) error {
+			select {
+			case handlerStarted <- struct{}{}:
+			default:
+			}
 			select {
 			case <-ctx.Done():
 				handlerDone <- struct{}{}
@@ -130,18 +135,24 @@ func TestServeContextCancellationPropagates(t *testing.T) {
 	_, err = conn.Write(head.Bytes())
 	require.NoError(t, err)
 
+	select {
+	case <-handlerStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not start")
+	}
+
 	cancel()
 
 	select {
 	case <-handlerDone:
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("handler did not observe cancellation")
 	}
 
 	select {
 	case err := <-serveErr:
 		require.ErrorIs(t, err, context.Canceled)
-	case <-time.After(time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("server did not stop after cancellation")
 	}
 }

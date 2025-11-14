@@ -2,11 +2,11 @@ package socks5_test
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -47,7 +47,7 @@ func TestBIND_WithPeer_Success(t *testing.T) {
 	rep1, err := protocol.ParseReply(client)
 	require.NoError(t, err)
 	require.Equal(t, byte(protocol.RepSuccess), rep1.Response)
-	bindAddr := fmt.Sprintf("%s:%d", rep1.BndAddr.IP.String(), rep1.BndAddr.Port)
+	bindAddr := net.JoinHostPort(rep1.BndAddr.IP.String(), strconv.Itoa(rep1.BndAddr.Port))
 
 	// peer connects to bind address
 	peer, err := net.Dial("tcp", bindAddr)
