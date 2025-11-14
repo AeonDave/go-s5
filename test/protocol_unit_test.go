@@ -67,7 +67,7 @@ func TestUserPassReply(t *testing.T) {
 	reader := bytes.NewReader([]byte{protocol.UserPassAuthVersion, protocol.AuthSuccess})
 	upr, err := protocol.ParseUserPassReply(reader)
 	require.NoError(t, err)
-	assert.Equal(t, protocol.UserPassReply{protocol.UserPassAuthVersion, protocol.AuthSuccess}, upr)
+	assert.Equal(t, protocol.UserPassReply{Ver: protocol.UserPassAuthVersion, Status: protocol.AuthSuccess}, upr)
 }
 
 func TestDatagram(t *testing.T) {
@@ -84,19 +84,19 @@ func TestDatagram(t *testing.T) {
 
 	dg, err := protocol.NewDatagram("localhost:8080", []byte{1, 2, 3})
 	require.NoError(t, err)
-	require.Equal(t, protocol.Datagram{0, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}, []byte{1, 2, 3}}, dg)
+	require.Equal(t, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}, Data: []byte{1, 2, 3}}, dg)
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}, dg.Header())
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90, 1, 2, 3}, dg.Bytes())
 
 	dg, err = protocol.NewDatagram("127.0.0.1:8080", []byte{1, 2, 3})
 	require.NoError(t, err)
-	require.Equal(t, protocol.Datagram{0, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}, []byte{1, 2, 3}}, dg)
+	require.Equal(t, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}, Data: []byte{1, 2, 3}}, dg)
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}, dg.Header())
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, dg.Bytes())
 
 	dg, err = protocol.NewDatagram("[::1]:8080", []byte{1, 2, 3})
 	require.NoError(t, err)
-	require.Equal(t, protocol.Datagram{0, 0, protocol.AddrSpec{IP: net.IPv6loopback, Port: 8080, AddrType: protocol.ATYPIPv6}, []byte{1, 2, 3}}, dg)
+	require.Equal(t, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv6loopback, Port: 8080, AddrType: protocol.ATYPIPv6}, Data: []byte{1, 2, 3}}, dg)
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90}, dg.Header())
 	require.Equal(t, []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, dg.Bytes())
 }
@@ -108,9 +108,9 @@ func TestParseDatagram(t *testing.T) {
 		wantDa  protocol.Datagram
 		wantErr bool
 	}{
-		{"IPv4", []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{0, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}, []byte{1, 2, 3}}, false},
-		{"IPv6", []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{0, 0, protocol.AddrSpec{IP: net.IPv6loopback, Port: 8080, AddrType: protocol.ATYPIPv6}, []byte{1, 2, 3}}, false},
-		{"FQDN", []byte{0, 0, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{0, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}, []byte{1, 2, 3}}, false},
+		{"IPv4", []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}, Data: []byte{1, 2, 3}}, false},
+		{"IPv6", []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv6loopback, Port: 8080, AddrType: protocol.ATYPIPv6}, Data: []byte{1, 2, 3}}, false},
+		{"FQDN", []byte{0, 0, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}, Data: []byte{1, 2, 3}}, false},
 		{"invalid address type", []byte{0, 0, 0, 0x02, 127, 0, 0, 1, 0x1f, 0x90}, protocol.Datagram{}, true},
 		{"less min length", []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f}, protocol.Datagram{}, true},
 		{"less domain length", []byte{0, 0, 0, protocol.ATYPDomain, 10, 127, 0, 0, 1, 0x1f, 0x09}, protocol.Datagram{}, true},
@@ -137,9 +137,9 @@ func TestParseRequest(t *testing.T) {
 		want    protocol.Request
 		wantErr bool
 	}{
-		{"SOCKS5 IPV4", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}), protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, false},
-		{"SOCKS5 IPV6", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}), protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, false},
-		{"SOCKS5 FQDN", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}), protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, false},
+		{"SOCKS5 IPV4", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}), protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, false},
+		{"SOCKS5 IPV6", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}), protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, false},
+		{"SOCKS5 FQDN", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}), protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, false},
 		{"SOCKS5 invalid address type", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.CommandConnect, 0, 0x02, 0, 0, 0, 0, 0, 0}), protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, DstAddr: protocol.AddrSpec{AddrType: 0x02}}, true},
 	}
 	for _, tt := range tests {
@@ -162,9 +162,9 @@ func TestRequest_Bytes(t *testing.T) {
 		request protocol.Request
 		wantB   []byte
 	}{
-		{"SOCKS5 IPV4", protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}},
-		{"SOCKS5 IPV6", protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}},
-		{"SOCKS5 FQDN", protocol.Request{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}},
+		{"SOCKS5 IPV4", protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}},
+		{"SOCKS5 IPV6", protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}},
+		{"SOCKS5 FQDN", protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, Reserved: 0, DstAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -182,9 +182,9 @@ func TestParseReply(t *testing.T) {
 		want    protocol.Reply
 		wantErr bool
 	}{
-		{"SOCKS5 IPV4", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}), protocol.Reply{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, false},
-		{"SOCKS5 IPV6", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}), protocol.Reply{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, false},
-		{"SOCKS5 FQDN", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}), protocol.Reply{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, false},
+		{"SOCKS5 IPV4", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}), protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess, Reserved: 0, BndAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, false},
+		{"SOCKS5 IPV6", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}), protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess, Reserved: 0, BndAddr: protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, false},
+		{"SOCKS5 FQDN", bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}), protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.RepSuccess, Reserved: 0, BndAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -206,9 +206,9 @@ func TestReply_Bytes(t *testing.T) {
 		reply protocol.Reply
 		wantB []byte
 	}{
-		{"SOCKS5 IPV4", protocol.Reply{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}},
-		{"SOCKS5 IPV6", protocol.Reply{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}},
-		{"SOCKS5 FQDN", protocol.Reply{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}},
+		{"SOCKS5 IPV4", protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.CommandConnect, Reserved: 0, BndAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90}},
+		{"SOCKS5 IPV6", protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.CommandConnect, Reserved: 0, BndAddr: protocol.AddrSpec{IP: net.IPv6zero, Port: 8080, AddrType: protocol.ATYPIPv6}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x1f, 0x90}},
+		{"SOCKS5 FQDN", protocol.Reply{Version: protocol.VersionSocks5, Response: protocol.CommandConnect, Reserved: 0, BndAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}}, []byte{protocol.VersionSocks5, protocol.CommandConnect, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -232,5 +232,5 @@ func TestMethodRequest(t *testing.T) {
 func TestMethodReply(t *testing.T) {
 	mr, err := protocol.ParseMethodReply(bytes.NewReader([]byte{protocol.VersionSocks5, protocol.RepSuccess}))
 	require.NoError(t, err)
-	assert.Equal(t, protocol.MethodReply{protocol.VersionSocks5, protocol.RepSuccess}, mr)
+	assert.Equal(t, protocol.MethodReply{Ver: protocol.VersionSocks5, Method: protocol.RepSuccess}, mr)
 }
