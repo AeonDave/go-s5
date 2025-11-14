@@ -2,7 +2,10 @@ package socks5_test
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"github.com/AeonDave/go-s5/internal/protocol"
@@ -60,6 +63,10 @@ func TestMapConnectDialError(t *testing.T) {
 		{name: "context deadline", err: context.DeadlineExceeded, expected: protocol.RepTTLExpired},
 		{name: "net timeout", err: fakeNetError{timeout: true}, expected: protocol.RepTTLExpired},
 		{name: "net temporary", err: fakeNetError{temporary: true}, expected: protocol.RepNetworkUnreachable},
+		{name: "syscall conn refused", err: wrapSyscallError(syscall.ECONNREFUSED), expected: protocol.RepConnectionRefused},
+		{name: "syscall net unreachable", err: wrapSyscallError(syscall.ENETUNREACH), expected: protocol.RepNetworkUnreachable},
+		{name: "syscall host unreachable", err: wrapSyscallError(syscall.EHOSTUNREACH), expected: protocol.RepHostUnreachable},
+		{name: "syscall timed out", err: wrapSyscallError(syscall.ETIMEDOUT), expected: protocol.RepTTLExpired},
 		{name: "dns not found", err: &net.DNSError{IsNotFound: true}, expected: protocol.RepHostUnreachable},
 		{name: "dns timeout", err: &net.DNSError{IsTimeout: true}, expected: protocol.RepTTLExpired},
 		{name: "string refused", err: fakeError("connection refused"), expected: protocol.RepConnectionRefused},
@@ -79,3 +86,11 @@ func TestMapConnectDialError(t *testing.T) {
 type fakeError string
 
 func (f fakeError) Error() string { return string(f) }
+
+func wrapSyscallError(errno syscall.Errno) error {
+	return fmt.Errorf("dial failed: %w", &net.OpError{
+		Op:  "dial",
+		Net: "tcp",
+		Err: &os.SyscallError{Syscall: "connect", Err: errno},
+	})
+}
