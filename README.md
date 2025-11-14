@@ -151,21 +151,41 @@ Client helper packages (TCP/UDP utilities)
 ### TCP stream helper
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-defer cancel()
-conn, _ := net.Dial("tcp", "127.0.0.1:1080")
-cli := client.New()
-_, _ = cli.Handshake(ctx, conn, nil)
-dst, _ := socks5protocol.ParseAddrSpec("example.org:443")
-stream, _, _ := cli.ConnectStream(ctx, conn, dst)
-defer stream.Close()
+package main
 
-// Set deadlines before exchanging data to avoid hanging sockets.
-_ = stream.SetDeadline(time.Now().Add(5 * time.Second))
-_, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
-buf := make([]byte, 1024)
-n, _ := stream.Read(buf)
-fmt.Printf("response: %s\n", buf[:n])
+import (
+    "context"
+    "fmt"
+    "net"
+    "time"
+
+    client "github.com/AeonDave/go-s5/client"
+    socks5protocol "github.com/AeonDave/go-s5/protocol"
+)
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+    defer conn.Close()
+
+    cli := client.New()
+    _, _ = cli.Handshake(ctx, conn, nil)
+
+    dst, _ := socks5protocol.ParseAddrSpec("example.org:443")
+    stream, _, _ := cli.ConnectStream(ctx, conn, dst)
+    defer stream.Close()
+
+    // Set deadlines before exchanging data to avoid hanging sockets.
+    _ = stream.SetDeadline(time.Now().Add(5 * time.Second))
+
+    _, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
+
+    buf := make([]byte, 1024)
+    n, _ := stream.Read(buf)
+    fmt.Printf("response: %s\n", buf[:n])
+}
 ```
 
 - `client/tcp.Stream.Relay` proxies two `net.Conn` instances using your context to
@@ -177,21 +197,38 @@ fmt.Printf("response: %s\n", buf[:n])
 ### UDP association helper
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-defer cancel()
-conn, _ := net.Dial("tcp", "127.0.0.1:1080")
-cli := client.New()
-_, _ = cli.Handshake(ctx, conn, nil)
-assoc, _, _ := cli.UDPAssociate(ctx, conn)
-defer assoc.Close()
+package main
 
-pc := assoc.PacketConn()
-target, _ := client.ParseUDPAddr("198.51.100.42:12345")
-_, _ = pc.WriteTo([]byte("payload"), target)
+import (
+    "context"
+    "fmt"
+    "net"
+    "time"
 
-buf := make([]byte, 1500)
-n, addr, _ := pc.ReadFrom(buf)
-fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
+    client "github.com/AeonDave/go-s5/client"
+)
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+    defer conn.Close()
+
+    cli := client.New()
+    _, _ = cli.Handshake(ctx, conn, nil)
+
+    assoc, _, _ := cli.UDPAssociate(ctx, conn)
+    defer assoc.Close()
+
+    pc := assoc.PacketConn()
+    target, _ := client.ParseUDPAddr("198.51.100.42:12345")
+    _, _ = pc.WriteTo([]byte("payload"), target)
+
+    buf := make([]byte, 1500)
+    n, addr, _ := pc.ReadFrom(buf)
+    fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
+}
 ```
 
 - Use `Association.RelayAddress()` if you need the relay endpoint for firewall
