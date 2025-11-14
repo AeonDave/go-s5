@@ -5,10 +5,12 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"time"
 
+	"github.com/AeonDave/go-s5/client/internal/logging"
+	ctcp "github.com/AeonDave/go-s5/client/tcp"
+	cudp "github.com/AeonDave/go-s5/client/udp"
 	"github.com/AeonDave/go-s5/protocol"
 )
 
@@ -31,6 +33,9 @@ type Client struct {
 	methods          []byte
 	udpLocalAddr     *net.UDPAddr
 	dialer           ContextDialer
+	logger           logging.Logger
+	udpKeepAliveIntv time.Duration
+	udpKeepAliveData []byte
 }
 
 // New creates a new Client.
@@ -40,6 +45,8 @@ func New(opts ...Option) *Client {
 		ioTimeout:        10 * time.Second,
 		methods:          nil,
 		udpLocalAddr:     &net.UDPAddr{IP: net.IPv4zero, Port: 0},
+		logger:           logging.NewNop(),
+		udpKeepAliveData: []byte{0},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -61,6 +68,32 @@ func WithMethods(methods []byte) Option {
 
 // WithUDPLocalAddr binds UDP ASSOCIATE to a specific local address.
 func WithUDPLocalAddr(addr *net.UDPAddr) Option { return func(c *Client) { c.udpLocalAddr = addr } }
+
+// WithLogger installs a custom logger for helper packages. Passing nil silences
+// all helper output.
+func WithLogger(l Logger) Option {
+	return func(c *Client) {
+		if l == nil {
+			c.logger = logging.NewNop()
+			return
+		}
+		c.logger = l
+	}
+}
+
+// WithUDPKeepAlive configures automatic keep-alive datagrams for UDP
+// associations. When interval is non-positive the keep alive loop is disabled.
+// payload may be nil, in which case a single zero byte is used.
+func WithUDPKeepAlive(interval time.Duration, payload []byte) Option {
+	return func(c *Client) {
+		c.udpKeepAliveIntv = interval
+		if len(payload) == 0 {
+			c.udpKeepAliveData = []byte{0}
+			return
+		}
+		c.udpKeepAliveData = append([]byte(nil), payload...)
+	}
+}
 
 // ContextDialer is a minimal interface implemented by *net.Dialer and custom dialers.
 type ContextDialer interface {
@@ -162,6 +195,20 @@ func (c *Client) Connect(ctx context.Context, conn net.Conn, dst protocol.AddrSp
 		return rep, mapRepError("CONNECT", rep.Response)
 	}
 	return rep, nil
+}
+
+// ConnectStream sends a CONNECT request and, on success, wraps the provided
+// connection into a TCPStream helper to simplify stream operations.
+func (c *Client) ConnectStream(ctx context.Context, conn net.Conn, dst protocol.AddrSpec) (*ctcp.Stream, protocol.Reply, error) {
+	rep, err := c.Connect(ctx, conn, dst)
+	if err != nil {
+		return nil, rep, err
+	}
+	stream, serr := ctcp.NewStream(conn, ctcp.WithLogger(c.logger))
+	if serr != nil {
+		return nil, rep, serr
+	}
+	return stream, rep, nil
 }
 
 // BindStart sends a BIND request with the expected peer address and returns the
@@ -357,61 +404,6 @@ func (c *Client) connectFinalTarget(ctx context.Context, conn net.Conn, finalTar
 	return err
 }
 
-// UDPAssociation represents an established UDP ASSOCIATE session.
-// The TCP conn must be kept open for the lifetime of the association.
-type UDPAssociation struct {
-	// Conn is the local UDP socket used to send/receive encapsulated datagrams.
-	Conn *net.UDPConn
-	// RelayAddr is the SOCKS server's UDP relay endpoint returned in BND.ADDR.
-	RelayAddr *net.UDPAddr
-}
-
-// Close closes the underlying UDP connection. It does not close the TCP conn.
-func (u *UDPAssociation) Close() error {
-	if u == nil || u.Conn == nil {
-		return nil
-	}
-	return u.Conn.Close()
-}
-
-// WriteTo sends payload to the destination via the SOCKS UDP relay.
-func (u *UDPAssociation) WriteTo(dst protocol.AddrSpec, payload []byte) (int, error) {
-	if u == nil || u.Conn == nil || u.RelayAddr == nil {
-		return 0, errors.New("invalid UDP association")
-	}
-	dg := protocol.Datagram{RSV: 0, Frag: 0, DstAddr: dst, Data: payload}
-	return u.Conn.WriteToUDP(dg.Bytes(), u.RelayAddr)
-}
-
-// ReadFrom receives a datagram from the relay, returning the original
-// destination address encoded by the server and the payload copied into buf.
-func (u *UDPAssociation) ReadFrom(buf []byte) (n int, dst protocol.AddrSpec, from *net.UDPAddr, err error) {
-	if u == nil || u.Conn == nil {
-		err = errors.New("invalid UDP association")
-		return
-	}
-	// Allocate a temporary buffer to accommodate headers.
-	tmp := make([]byte, len(buf)+64)
-	var rn int
-	rn, from, err = u.Conn.ReadFromUDP(tmp)
-	if err != nil {
-		return
-	}
-	dg, perr := protocol.ParseDatagram(tmp[:rn])
-	if perr != nil {
-		err = perr
-		return
-	}
-	if len(dg.Data) > len(buf) {
-		err = io.ErrShortBuffer
-		return
-	}
-	copy(buf, dg.Data)
-	n = len(dg.Data)
-	dst = dg.DstAddr
-	return
-}
-
 // UDPAssociate establishes a UDP ASSOCIATE on conn. It binds a local UDP
 // socket (configurable via WithUDPLocalAddr) and advertises its address in the
 // ASSOCIATE request. It returns the local UDP association and the server reply.
@@ -488,7 +480,15 @@ func (c *Client) UDPAssociate(ctx context.Context, conn net.Conn) (*UDPAssociati
 	}
 	relay := &net.UDPAddr{IP: relayIP, Port: rep.BndAddr.Port}
 
-	return &UDPAssociation{Conn: pc, RelayAddr: relay}, rep, nil
+	assoc, aerr := cudp.NewAssociation(pc, relay,
+		cudp.WithLogger(c.logger),
+		cudp.WithKeepAlive(c.udpKeepAliveIntv, c.udpKeepAliveData),
+	)
+	if aerr != nil {
+		_ = pc.Close()
+		return nil, rep, aerr
+	}
+	return assoc, rep, nil
 }
 
 // Utility: apply combined deadline derived from ctx and fallback timeout.
