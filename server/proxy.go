@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"syscall"
 
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
@@ -58,10 +59,16 @@ func isSafeReadFrom(r io.Reader) bool {
 }
 
 func udpNetworkFor(ip net.IP) string {
-	if ip != nil && ip.To4() != nil {
+	if ip == nil {
+		return "udp"
+	}
+	if ip4 := ip.To4(); ip4 != nil {
 		return "udp4"
 	}
-	return "udp6"
+	if ip16 := ip.To16(); ip16 != nil {
+		return "udp6"
+	}
+	return "udp"
 }
 
 // borrowBuf gets a buffer from the pool and returns it with a put func.
@@ -186,6 +193,44 @@ func mapConnectDialError(err error) uint8 {
 	if err == nil {
 		return protocol.RepSuccess
 	}
+
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return protocol.RepTTLExpired
+	}
+
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		if netErr.Timeout() {
+			return protocol.RepTTLExpired
+		}
+		if netErr.Temporary() {
+			return protocol.RepNetworkUnreachable
+		}
+	}
+
+	if errno := errnoFromError(err); errno != 0 {
+		switch errno {
+		case syscall.ECONNREFUSED:
+			return protocol.RepConnectionRefused
+		case syscall.ENETUNREACH, syscall.ENETDOWN, syscall.ENETRESET, syscall.EADDRNOTAVAIL:
+			return protocol.RepNetworkUnreachable
+		case syscall.EHOSTUNREACH, syscall.EHOSTDOWN:
+			return protocol.RepHostUnreachable
+		case syscall.ETIMEDOUT, syscall.EWOULDBLOCK:
+			return protocol.RepTTLExpired
+		}
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		switch {
+		case dnsErr.IsNotFound:
+			return protocol.RepHostUnreachable
+		case dnsErr.Timeout():
+			return protocol.RepTTLExpired
+		}
+	}
+
 	msg := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(msg, "refused"):
@@ -197,4 +242,12 @@ func mapConnectDialError(err error) uint8 {
 	default:
 		return protocol.RepHostUnreachable
 	}
+}
+
+func errnoFromError(err error) syscall.Errno {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno
+	}
+	return 0
 }
