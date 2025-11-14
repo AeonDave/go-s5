@@ -37,7 +37,7 @@ type Association struct {
 	keepAliveDone     chan struct{}
 }
 
-const datagramOverhead = 4 + 1 + 255 + 2 // RSV + FRAG + domain length + port
+const datagramOverhead = 4 + 1 + 255 + 2 // RSV(2)+FRAG(1)+ATYP(1) + LEN(1)+max_domain(255)+PORT(2)
 const (
 	defaultScratchSize    = 2048 + datagramOverhead
 	maxPooledScratchBytes = 64*1024 + datagramOverhead
