@@ -49,8 +49,10 @@ func ParseAddrSpec(addr string) (AddrSpec, error) {
 	}
 }
 
-
 func AddrTypeFromIP(ip net.IP) byte {
+	if ip == nil {
+		return ATYPIPv4
+	}
 	if ip.To4() != nil {
 		return ATYPIPv4
 	}

@@ -80,6 +80,7 @@ func (sf *Server) udpBindAddrForAssociate(request *handler.Request) *net.UDPAddr
 
 func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, request *handler.Request) {
 	conns := &sync.Map{}
+	resolvedCache := &sync.Map{}
 	buf, put := sf.borrowBuf()
 	defer func() {
 		put()
@@ -104,7 +105,7 @@ func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, req
 		if !ok {
 			return
 		}
-		sf.handleUDPDatagram(ctx, bindLn, conns, srcAddr, pk, request)
+		sf.handleUDPDatagram(ctx, bindLn, conns, resolvedCache, srcAddr, pk, request)
 	}
 }
 
@@ -160,13 +161,24 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map) func() {
 	return func() { ticker.Stop(); close(stopCh) }
 }
 
-func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
-	dstAddr := pk.DstAddr
+func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, resolvedCache *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
+	dstAddr := pk.DstAddr // Copy to avoid mutating original pk.DstAddr
+	var flowKey string
 	if dstAddr.FQDN != "" {
+		flowKey = srcAddr.String() + "--" + dstAddr.FQDN + ":" + strconv.Itoa(dstAddr.Port)
 		_, ip, err := sf.resolver.Resolve(ctx, dstAddr.FQDN)
 		if err == nil && ip != nil {
 			dstAddr.IP = ip
 			dstAddr.AddrType = protocol.AddrTypeFromIP(ip)
+			dstAddr.FQDN = ""
+			resolvedCache.Store(flowKey, dstAddr)
+		} else if err != nil {
+			sf.logger.Errorf("resolve %s failed: %v", dstAddr.FQDN, err)
+			if cached, ok := resolvedCache.Load(flowKey); ok {
+				if cachedAddr, ok := cached.(protocol.AddrSpec); ok {
+					dstAddr = cachedAddr
+				}
+			}
 		}
 	}
 

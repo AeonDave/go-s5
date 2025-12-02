@@ -71,10 +71,15 @@ func TestSOCKS5_Associate_FQDN_Cache(t *testing.T) {
 	// Mock DNS resolver
 	mockDNS := &mockResolverWithDelay{
 		records: make(map[string]net.IP),
-		delay:   100 * time.Millisecond,
+		delay:   50 * time.Millisecond,
 	}
 	fqdn := "cache.test.com"
-	mockDNS.Update(fqdn, net.ParseIP("127.0.0.1"))
+	backendOne, stopOne := startUDPBackend(t, "udp4", "127.0.0.1:0", []byte("one"))
+	defer stopOne()
+	backendTwo, stopTwo := startUDPBackend(t, "udp4", "127.0.0.2:0", []byte("two"))
+	defer stopTwo()
+
+	mockDNS.Update(fqdn, backendOne.IP)
 
 	// SOCKS5 server
 	listen, stop := startSocks5(t,
@@ -98,27 +103,56 @@ func TestSOCKS5_Associate_FQDN_Cache(t *testing.T) {
 	req := protocol.Request{
 		Version: protocol.VersionSocks5,
 		Command: protocol.CommandAssociate,
-		DstAddr: protocol.AddrSpec{FQDN: fqdn, Port: 1234, AddrType: protocol.ATYPDomain},
+		DstAddr: protocol.AddrSpec{IP: net.IPv4zero, Port: 0, AddrType: protocol.ATYPIPv4},
 	}
 	_, err = conn.Write(req.Bytes())
 	require.NoError(t, err)
-	_, err = protocol.ParseReply(conn)
+	rep, err := protocol.ParseReply(conn)
 	require.NoError(t, err)
 
-	// Second Associate request
-	start := time.Now()
-	_, err = conn.Write(req.Bytes())
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
 	require.NoError(t, err)
-	_, err = protocol.ParseReply(conn)
-	require.NoError(t, err)
-	duration := time.Since(start)
+	defer client.Close()
 
-	require.Less(t, duration, mockDNS.delay, "The second request should be faster due to caching")
+	proxyIP := rep.BndAddr.IP
+	if proxyIP == nil {
+		proxyIP = net.ParseIP("127.0.0.1")
+	}
+	proxyAddr := &net.UDPAddr{IP: proxyIP, Port: rep.BndAddr.Port}
+	sendDatagram := func(port int, payload []byte) []byte {
+		dg := protocol.Datagram{DstAddr: protocol.AddrSpec{FQDN: fqdn, Port: port, AddrType: protocol.ATYPDomain}, Data: payload}
+		_, err := client.WriteTo(dg.Bytes(), proxyAddr)
+		require.NoError(t, err)
+
+		buf := make([]byte, 2048)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _, err := client.ReadFrom(buf)
+		require.NoError(t, err)
+		_ = client.SetReadDeadline(time.Time{})
+
+		parsed, err := protocol.ParseDatagram(buf[:n])
+		require.NoError(t, err)
+		return parsed.Data
+	}
+
+	// First datagram resolves to backendOne.
+	require.Equal(t, []byte("one"), sendDatagram(backendOne.Port, []byte("ping-one")))
+
+	// Update DNS so the next datagram should reach backendTwo, ensuring the cache key uses the resolved IP.
+	mockDNS.Update(fqdn, backendTwo.IP)
+	require.Equal(t, []byte("two"), sendDatagram(backendTwo.Port, []byte("ping-two")))
 }
 
 func TestSOCKS5_Associate_FQDN_UsesResolvedIPForCacheKey(t *testing.T) {
 	mockDNS := &mockResolverWithDelay{records: make(map[string]net.IP)}
 	fqdn := "cache-key.test"
+
+	// Skip when IPv6 UDP is unavailable to keep the test suite portable.
+	if probe, err := net.ListenPacket("udp6", "[::1]:0"); err != nil {
+		t.Skipf("IPv6 UDP not available: %v", err)
+	} else {
+		_ = probe.Close()
+	}
 
 	// Backends on the same port but different IP families.
 	v4Addr, stopV4 := startUDPBackend(t, "udp4", "127.0.0.1:0", []byte("v4"))
