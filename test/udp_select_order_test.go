@@ -95,10 +95,7 @@ func TestUDP_FQDN_FallbackOrder_IPv4Client(t *testing.T) {
 	msg = append(msg, []byte("ping")...)
 	_, _ = client.WriteTo(msg, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: rep.BndAddr.Port})
 
-	// Give server time to invoke dialer twice
-	time.Sleep(50 * time.Millisecond)
-
-	require.GreaterOrEqual(t, len(attempts), 2, "expected at least two dial attempts")
+	require.Eventually(t, func() bool { return len(attempts) >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
 	require.Equal(t, []string{"udp4", "udp6"}, attempts[:2])
 }
 
@@ -172,8 +169,6 @@ func TestUDP_FQDN_FallbackOrder_IPv6Client(t *testing.T) {
 	msg = append(msg, []byte("ping")...)
 	_, _ = client.WriteTo(msg, &net.UDPAddr{IP: net.IPv6loopback, Port: rep.BndAddr.Port})
 
-	time.Sleep(50 * time.Millisecond)
-
-	require.GreaterOrEqual(t, len(attempts), 2, "expected at least two dial attempts")
+	require.Eventually(t, func() bool { return len(attempts) >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
 	require.Equal(t, []string{"udp6", "udp4"}, attempts[:2])
 }
