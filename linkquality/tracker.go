@@ -108,6 +108,14 @@ type measuredConn struct {
 	tracker *Tracker
 }
 
+func (c *measuredConn) CloseWrite() error {
+	type closeWriter interface{ CloseWrite() error }
+	if cw, ok := c.Conn.(closeWriter); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // NewTracker creates a monitor bound to the provided metadata.
 func NewTracker(meta Metadata) *Tracker {
 	now := time.Now()
