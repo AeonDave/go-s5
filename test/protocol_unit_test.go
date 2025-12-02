@@ -141,6 +141,20 @@ func TestParseDatagram(t *testing.T) {
 	}
 }
 
+func TestParseDatagramCopiesIPv6Address(t *testing.T) {
+	buf := []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}
+	originalIP := append([]byte(nil), buf[4:4+net.IPv6len]...)
+
+	dg, err := protocol.ParseDatagram(buf)
+	require.NoError(t, err)
+
+	for i := 4; i < 4+net.IPv6len; i++ {
+		buf[i] = 0xff
+	}
+
+	assert.Equal(t, originalIP, []byte(dg.DstAddr.IP))
+}
+
 func TestParseRequest(t *testing.T) {
 	tests := []struct {
 		name    string

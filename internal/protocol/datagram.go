@@ -48,7 +48,7 @@ func ParseDatagram(b []byte) (Datagram, error) {
 		if len(b) < headLen+net.IPv6len+2 {
 			return Datagram{}, errors.New(errDatagramTooShortMsg)
 		}
-		da.DstAddr.IP = b[4 : 4+net.IPv6len]
+		da.DstAddr.IP = append(net.IP(nil), b[4:4+net.IPv6len]...)
 		da.DstAddr.Port = int(binary.BigEndian.Uint16(b[20:22]))
 		headLen += net.IPv6len + 2
 	case ATYPDomain:
