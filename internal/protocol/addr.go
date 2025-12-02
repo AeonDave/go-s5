@@ -48,3 +48,11 @@ func ParseAddrSpec(addr string) (AddrSpec, error) {
 		return AddrSpec{FQDN: host, Port: portNum, AddrType: ATYPDomain}, nil
 	}
 }
+
+
+func AddrTypeFromIP(ip net.IP) byte {
+	if ip.To4() != nil {
+		return ATYPIPv4
+	}
+	return ATYPIPv6
+}

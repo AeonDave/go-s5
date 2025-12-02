@@ -161,7 +161,16 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map) func() {
 }
 
 func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
-	connKey := srcAddr.String() + "--" + pk.DstAddr.String()
+	dstAddr := pk.DstAddr
+	if dstAddr.FQDN != "" {
+		_, ip, err := sf.resolver.Resolve(ctx, dstAddr.FQDN)
+		if err == nil && ip != nil {
+			dstAddr.IP = ip
+			dstAddr.AddrType = protocol.AddrTypeFromIP(ip)
+		}
+	}
+
+	connKey := srcAddr.String() + "--" + dstAddr.String()
 	if v, ok := conns.Load(connKey); ok {
 		p := v.(*udpPeer)
 		if _, err := p.conn.Write(pk.Data); err != nil {
@@ -178,7 +187,7 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 		return
 	}
 
-	dialNets, dialAddr := sf.selectUDPDial(srcAddr, &pk)
+	dialNets, dialAddr := sf.selectUDPDial(srcAddr, &dstAddr)
 	var targetNew net.Conn
 	var err error
 	for _, dialNet := range dialNets {
@@ -217,13 +226,13 @@ func (sf *Server) reachUDPMaxPeers(conns *sync.Map) bool {
 	return cur >= sf.udpMaxPeers
 }
 
-func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, pk *protocol.Datagram) (networks []string, addr string) {
-	addr = pk.DstAddr.String()
-	if pk.DstAddr.FQDN != "" {
-		addr = net.JoinHostPort(pk.DstAddr.FQDN, strconv.Itoa(pk.DstAddr.Port))
+func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, dstAddr *protocol.AddrSpec) (networks []string, addr string) {
+	addr = dstAddr.String()
+	if dstAddr.FQDN != "" {
+		addr = net.JoinHostPort(dstAddr.FQDN, strconv.Itoa(dstAddr.Port))
 	}
 
-	switch pk.DstAddr.AddrType {
+	switch dstAddr.AddrType {
 	case protocol.ATYPIPv4:
 		networks = []string{"udp4"}
 	case protocol.ATYPIPv6:
