@@ -32,6 +32,20 @@ func minDuration(a, b time.Duration) time.Duration {
 	return b
 }
 
+//goland:noinspection GoUnusedFunction
+func udpNetworkFor(ip net.IP) string {
+	if len(ip) == 0 {
+		return "udp"
+	}
+	if ip.To4() != nil {
+		return "udp4"
+	}
+	if ip.To16() != nil {
+		return "udp6"
+	}
+	return "udp"
+}
+
 func (sf *Server) handleAssociate(ctx context.Context, writer io.Writer, request *handler.Request) error {
 	udpAddr := sf.udpBindAddrForAssociate(request)
 	bindLn, err := net.ListenUDP("udp", udpAddr)
