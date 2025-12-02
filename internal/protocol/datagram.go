@@ -29,12 +29,12 @@ func NewDatagram(destAddr string, data []byte) (Datagram, error) {
 }
 
 func ParseDatagram(b []byte) (Datagram, error) {
-	if len(b) < 4+net.IPv4len+2 {
-		return Datagram{}, errors.New(errDatagramTooShortMsg)
-	}
+        if len(b) < 4 {
+                return Datagram{}, errors.New(errDatagramTooShortMsg)
+        }
 
-	da := Datagram{RSV: 0, Frag: b[2], DstAddr: AddrSpec{AddrType: b[3]}}
-	headLen := 4
+        da := Datagram{RSV: 0, Frag: b[2], DstAddr: AddrSpec{AddrType: b[3]}}
+        headLen := 4
 
 	switch da.DstAddr.AddrType {
 	case ATYPIPv4:

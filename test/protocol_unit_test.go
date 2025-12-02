@@ -119,6 +119,7 @@ func TestParseDatagram(t *testing.T) {
 		wantDa  protocol.Datagram
 		wantErr bool
 	}{
+		{"FQDN minimal", []byte{0, 0, 0, protocol.ATYPDomain, 1, 'a', 0, 80}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{FQDN: "a", Port: 80, AddrType: protocol.ATYPDomain}, Data: []byte{}}, false},
 		{"IPv4", []byte{0, 0, 0, protocol.ATYPIPv4, 127, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv4(127, 0, 0, 1), Port: 8080, AddrType: protocol.ATYPIPv4}, Data: []byte{1, 2, 3}}, false},
 		{"IPv6", []byte{0, 0, 0, protocol.ATYPIPv6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{IP: net.IPv6loopback, Port: 8080, AddrType: protocol.ATYPIPv6}, Data: []byte{1, 2, 3}}, false},
 		{"FQDN", []byte{0, 0, 0, protocol.ATYPDomain, 9, 'l', 'o', 'c', 'a', 'l', 'h', 'o', 's', 't', 0x1f, 0x90, 1, 2, 3}, protocol.Datagram{RSV: 0, Frag: 0, DstAddr: protocol.AddrSpec{FQDN: "localhost", Port: 8080, AddrType: protocol.ATYPDomain}, Data: []byte{1, 2, 3}}, false},
