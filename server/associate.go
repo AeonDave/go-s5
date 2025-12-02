@@ -164,7 +164,7 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 		return
 	}
 
-	dialNet, dialAddr := sf.selectUDPDial(srcAddr, &pk)
+	dialNet, dialAddr := sf.selectUDPDial(&pk)
 	targetNew, err := sf.dialOut(ctx, dialNet, dialAddr, request)
 	if err != nil {
 		sf.logger.Errorf("connect to %v failed, %v", pk.DstAddr, err)
@@ -196,11 +196,10 @@ func (sf *Server) reachUDPMaxPeers(conns *sync.Map) bool {
 	return cur >= sf.udpMaxPeers
 }
 
-func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, pk *protocol.Datagram) (network, addr string) {
+func (sf *Server) selectUDPDial(pk *protocol.Datagram) (network, addr string) {
 	addr = pk.DstAddr.String()
 	network = "udp"
 	if pk.DstAddr.FQDN != "" {
-		network = udpNetworkFor(srcAddr.IP)
 		addr = net.JoinHostPort(pk.DstAddr.FQDN, strconv.Itoa(pk.DstAddr.Port))
 	}
 	return
