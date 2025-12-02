@@ -58,19 +58,6 @@ func isSafeReadFrom(r io.Reader) bool {
 	}
 }
 
-func udpNetworkFor(ip net.IP) string {
-	if ip == nil {
-		return "udp"
-	}
-	if ip4 := ip.To4(); ip4 != nil {
-		return "udp4"
-	}
-	if ip16 := ip.To16(); ip16 != nil {
-		return "udp6"
-	}
-	return "udp"
-}
-
 // borrowBuf gets a buffer from the pool and returns it with a put func.
 func (sf *Server) borrowBuf() ([]byte, func()) {
 	b := sf.bufferPool.Get()
@@ -126,12 +113,20 @@ func (sf *Server) proxyDuplex(aDst io.Writer, aSrc io.Reader, bDst io.Writer, bS
 	errCh := make(chan error, 2)
 	sf.goFunc(func() { errCh <- sf.Proxy(aDst, aSrc) })
 	sf.goFunc(func() { errCh <- sf.Proxy(bDst, bSrc) })
-	for i := 0; i < 2; i++ {
-		if e := <-errCh; e != nil {
-			return e
-		}
+	err1 := <-errCh
+	err2 := <-errCh
+
+	if err1 != nil && !isEOFOrClosed(err1) {
+		return err1
 	}
-	return nil
+	if err2 != nil && !isEOFOrClosed(err2) {
+		return err2
+	}
+
+	if err1 != nil {
+		return err1
+	}
+	return err2
 }
 
 func SendReply(w io.Writer, rep uint8, bindAddr net.Addr) error {

@@ -12,8 +12,7 @@ import (
 
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/internal/protocol"
-	server "github.com/AeonDave/go-s5/server"
-
+	"github.com/AeonDave/go-s5/server"
 	"github.com/stretchr/testify/require"
 )
 

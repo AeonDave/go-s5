@@ -163,8 +163,11 @@ func (t *Tracker) RecordProbe(rtt time.Duration, err error) {
 
 // RecordThroughput records an observed payload transfer.
 func (t *Tracker) RecordThroughput(bytes int64, duration time.Duration) {
-	if duration <= 0 || bytes <= 0 {
+	if bytes <= 0 {
 		return
+	}
+	if duration <= 0 {
+		duration = time.Nanosecond
 	}
 	rate := float64(bytes) / duration.Seconds()
 
@@ -318,9 +321,19 @@ func (t *Tracker) computeUptime(now time.Time) (uptime, downtime time.Duration, 
 	if elapsed <= 0 {
 		return 0, downtime, 1
 	}
+	if downtime > elapsed {
+		downtime = elapsed
+	}
 	uptime = elapsed - downtime
 	if uptime < 0 {
 		uptime = 0
+	}
+	if uptime == 0 && t.stateUp {
+		uptime = time.Nanosecond
+		if uptime > elapsed {
+			uptime = elapsed
+		}
+		downtime = elapsed - uptime
 	}
 	ratio = float64(uptime) / float64(elapsed)
 	return uptime, downtime, ratio

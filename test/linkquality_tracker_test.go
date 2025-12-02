@@ -1,4 +1,4 @@
-package linkquality
+package socks5_test
 
 import (
 	"context"
@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AeonDave/go-s5/linkquality"
 	"github.com/stretchr/testify/require"
 )
 
 func TestTrackerAggregatesMetrics(t *testing.T) {
-	tracker := NewTracker(Metadata{Kind: EndpointSOCKS5, TLS: true, Notes: "chain hop"})
+	tracker := linkquality.NewTracker(linkquality.Metadata{Kind: linkquality.EndpointSOCKS5, TLS: true, Notes: "chain hop"})
 
 	tracker.RecordProbe(20*time.Millisecond, nil)
 	tracker.RecordProbe(30*time.Millisecond, nil)
@@ -49,7 +50,9 @@ func TestProbeTCPUsesTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func(ln net.Listener) {
+		_ = ln.Close()
+	}(ln)
 
 	var accepted int32
 	go func() {
@@ -63,8 +66,8 @@ func TestProbeTCPUsesTracker(t *testing.T) {
 		}
 	}()
 
-	tracker := NewTracker(Metadata{RemoteAddr: ln.Addr().String(), Kind: EndpointTCP})
-	info, err := ProbeTCP(ln.Addr().String(), 3, 200*time.Millisecond, tracker)
+	tracker := linkquality.NewTracker(linkquality.Metadata{RemoteAddr: ln.Addr().String(), Kind: linkquality.EndpointTCP})
+	info, err := linkquality.ProbeTCP(ln.Addr().String(), 3, 200*time.Millisecond, tracker)
 	if err != nil {
 		t.Fatalf("probe tcp: %v", err)
 	}
@@ -79,9 +82,9 @@ func TestProbeTCPUsesTracker(t *testing.T) {
 
 func TestProbeSOCKSHandshake(t *testing.T) {
 	ctx := context.Background()
-	tracker := NewTracker(Metadata{Kind: EndpointSOCKS5, TLS: false, Notes: "handshake"})
+	tracker := linkquality.NewTracker(linkquality.Metadata{Kind: linkquality.EndpointSOCKS5, TLS: false, Notes: "handshake"})
 
-	info, err := ProbeSOCKSHandshake(ctx, func(context.Context) (net.Conn, error) {
+	info, err := linkquality.ProbeSOCKSHandshake(ctx, func(context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		_ = server.Close()
 		return client, nil
@@ -93,41 +96,8 @@ func TestProbeSOCKSHandshake(t *testing.T) {
 	if info.Success != 1 || info.Failures != 0 {
 		t.Fatalf("unexpected probe result: %+v", info)
 	}
-	if info.Metadata.Kind != EndpointSOCKS5 {
+	if info.Metadata.Kind != linkquality.EndpointSOCKS5 {
 		t.Fatalf("metadata kind mismatch: %+v", info.Metadata)
-	}
-}
-
-func TestWrapConnIsTransparent(t *testing.T) {
-	tracker := NewTracker(Metadata{Kind: EndpointTCP})
-	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
-
-	wrapped := WrapConn(client, tracker)
-	msg := []byte("hello")
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		buf := make([]byte, len(msg))
-		n, err := server.Read(buf)
-		if err != nil {
-			t.Fatalf("server read: %v", err)
-		}
-		if string(buf[:n]) != string(msg) {
-			t.Fatalf("unexpected payload: %q", buf[:n])
-		}
-	}()
-
-	if _, err := wrapped.Write(msg); err != nil {
-		t.Fatalf("write failed: %v", err)
-	}
-	<-done
-
-	info := tracker.ConnectionInfo()
-	if info.Throughput.Samples == 0 || info.Throughput.TotalBytes == 0 {
-		t.Fatalf("throughput not recorded: %+v", info.Throughput)
 	}
 }
 
@@ -145,7 +115,7 @@ func (c *closeWriterConn) CloseWrite() error {
 }
 
 func TestWrapConnPreservesCloseWrite(t *testing.T) {
-	tracker := NewTracker(Metadata{Kind: EndpointTCP})
+	tracker := linkquality.NewTracker(linkquality.Metadata{Kind: linkquality.EndpointTCP})
 	client, server := net.Pipe()
 	t.Cleanup(func() {
 		_ = client.Close()
@@ -153,10 +123,49 @@ func TestWrapConnPreservesCloseWrite(t *testing.T) {
 	})
 
 	cw := &closeWriterConn{Conn: client}
-	wrapped := WrapConn(cw, tracker)
+	wrapped := linkquality.WrapConn(cw, tracker)
 
 	halfCloser, ok := wrapped.(interface{ CloseWrite() error })
 	require.True(t, ok, "wrapped connection should expose CloseWrite")
 	require.NoError(t, halfCloser.CloseWrite())
 	require.True(t, cw.called, "underlying CloseWrite should be invoked")
+}
+
+func TestWrapConnIsTransparent(t *testing.T) {
+	tracker := linkquality.NewTracker(linkquality.Metadata{Kind: linkquality.EndpointTCP})
+	client, server := net.Pipe()
+	defer func(client net.Conn) {
+		_ = client.Close()
+	}(client)
+	defer func(server net.Conn) {
+		_ = server.Close()
+	}(server)
+
+	wrapped := linkquality.WrapConn(client, tracker)
+	msg := []byte("hello")
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		buf := make([]byte, len(msg))
+		n, err := server.Read(buf)
+		if err != nil {
+			t.Errorf("server read: %v", err)
+			return
+		}
+		if string(buf[:n]) != string(msg) {
+			t.Errorf("unexpected payload: %q", buf[:n])
+			return
+		}
+	}()
+
+	if _, err := wrapped.Write(msg); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	<-done
+
+	info := tracker.ConnectionInfo()
+	if info.Throughput.Samples == 0 || info.Throughput.TotalBytes == 0 {
+		t.Fatalf("throughput not recorded: %+v", info.Throughput)
+	}
 }
