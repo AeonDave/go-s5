@@ -150,7 +150,10 @@ func (c *Client) Handshake(ctx context.Context, conn net.Conn, creds *Credential
 		if creds == nil {
 			return mr, fmt.Errorf("server requires username/password but no credentials provided")
 		}
-		upr := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte(creds.Username), []byte(creds.Password))
+		upr, reqErr := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte(creds.Username), []byte(creds.Password))
+		if reqErr != nil {
+			return mr, fmt.Errorf("build user/pass request: %w", reqErr)
+		}
 		if _, err := conn.Write(upr.Bytes()); err != nil {
 			return mr, fmt.Errorf("write user/pass request: %w", err)
 		}

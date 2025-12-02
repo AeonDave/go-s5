@@ -80,7 +80,8 @@ func TestSOCKS5_Connect_OK(t *testing.T) {
 	// Build client bytes: method offer + userpass + connect request + payload
 	req := bytes.NewBuffer(nil)
 	req.Write([]byte{protocol.VersionSocks5, 2, protocol.MethodNoAuth, protocol.MethodUserPassAuth})
-	up := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	up, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	require.NoError(t, err)
 	req.Write(up.Bytes())
 	head := protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, DstAddr: protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: backendAddr.Port, AddrType: protocol.ATYPIPv4}}
 	req.Write(head.Bytes())
@@ -146,7 +147,8 @@ func TestSOCKS5_Connect_CustomHandler(t *testing.T) {
 	// handshake + userpass + CONNECT + payload
 	req := bytes.NewBuffer(nil)
 	req.Write([]byte{protocol.VersionSocks5, 2, protocol.MethodNoAuth, protocol.MethodUserPassAuth})
-	up := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	up, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	require.NoError(t, err)
 	req.Write(up.Bytes())
 	head := protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, DstAddr: protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: backendAddr.Port, AddrType: protocol.ATYPIPv4}}
 	req.Write(head.Bytes())

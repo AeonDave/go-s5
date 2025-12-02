@@ -51,7 +51,8 @@ func TestAuth_UserPass_Valid(t *testing.T) {
 	// Offer methods + then send userpass
 	req := bytes.NewBuffer(nil)
 	req.Write([]byte{protocol.VersionSocks5, 1, protocol.MethodUserPassAuth})
-	up := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	up, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	require.NoError(t, err)
 	req.Write(up.Bytes())
 	_, _ = conn.Write(req.Bytes())
 	// method
@@ -80,7 +81,8 @@ func TestAuth_UserPass_Invalid(t *testing.T) {
 	// Offer methods + invalid userpass
 	req := bytes.NewBuffer(nil)
 	req.Write([]byte{protocol.VersionSocks5, 1, protocol.MethodUserPassAuth})
-	up := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("baz"))
+	up, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("baz"))
+	require.NoError(t, err)
 	req.Write(up.Bytes())
 	_, _ = conn.Write(req.Bytes())
 	// method
