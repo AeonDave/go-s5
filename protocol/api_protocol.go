@@ -84,7 +84,7 @@ type (
 	UserPassReply   = ip.UserPassReply
 )
 
-func NewUserPassRequest(ver byte, user, pass []byte) UserPassRequest {
+func NewUserPassRequest(ver byte, user, pass []byte) (UserPassRequest, error) {
 	return ip.NewUserPassRequest(ver, user, pass)
 }
 func ParseUserPassRequest(r io.Reader) (UserPassRequest, error) { return ip.ParseUserPassRequest(r) }

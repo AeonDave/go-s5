@@ -3,6 +3,7 @@ package protocol
 import (
 	"fmt"
 	"io"
+	"math"
 )
 
 var (
@@ -23,14 +24,20 @@ type UserPassReply struct {
 	Status byte
 }
 
-func NewUserPassRequest(ver byte, user, pass []byte) UserPassRequest {
+func NewUserPassRequest(ver byte, user, pass []byte) (UserPassRequest, error) {
+	if len(user) > math.MaxUint8 {
+		return UserPassRequest{}, fmt.Errorf("username too long: %d", len(user))
+	}
+	if len(pass) > math.MaxUint8 {
+		return UserPassRequest{}, fmt.Errorf("password too long: %d", len(pass))
+	}
 	return UserPassRequest{
 		Ver:  ver,
 		Ulen: byte(len(user)),
 		Plen: byte(len(pass)),
 		User: user,
 		Pass: pass,
-	}
+	}, nil
 }
 
 func ParseUserPassRequest(r io.Reader) (UserPassRequest, error) {

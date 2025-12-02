@@ -54,7 +54,8 @@ func TestUDP_FQDNTarget(t *testing.T) {
 
 	req := bytes.NewBuffer(nil)
 	req.Write([]byte{protocol.VersionSocks5, 2, protocol.MethodNoAuth, protocol.MethodUserPassAuth})
-	up := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	up, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("foo"), []byte("bar"))
+	require.NoError(t, err)
 	req.Write(up.Bytes())
 	head := protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandAssociate,
 		DstAddr: protocol.AddrSpec{IP: locIP, Port: 0, AddrType: protocol.ATYPIPv4}}

@@ -55,12 +55,23 @@ func TestParseAddrSpec(t *testing.T) {
 
 func TestUserPassRequest(t *testing.T) {
 	want := []byte{protocol.UserPassAuthVersion, 4, 'u', 's', 'e', 'r', 8, 'p', 'a', 's', 's', 'w', 'o', 'r', 'd'}
-	userpass := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("user"), []byte("password"))
+	userpass, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("user"), []byte("password"))
+	require.NoError(t, err)
 	assert.Equal(t, want, userpass.Bytes())
 
 	upr, err := protocol.ParseUserPassRequest(bytes.NewReader(want))
 	require.NoError(t, err)
 	assert.Equal(t, userpass, upr)
+}
+
+func TestUserPassRequestRejectsLongCredentials(t *testing.T) {
+	longUser := bytes.Repeat([]byte{'u'}, 300)
+	_, err := protocol.NewUserPassRequest(protocol.UserPassAuthVersion, longUser, []byte("pass"))
+	require.Error(t, err)
+
+	longPass := bytes.Repeat([]byte{'p'}, 400)
+	_, err = protocol.NewUserPassRequest(protocol.UserPassAuthVersion, []byte("user"), longPass)
+	require.Error(t, err)
 }
 
 func TestUserPassReply(t *testing.T) {
