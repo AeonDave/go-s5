@@ -13,6 +13,8 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/net/proxy"
+
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/client"
 	"github.com/AeonDave/go-s5/protocol"
@@ -34,6 +36,9 @@ func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, "  -tls-cert string          TLS cert file (enables TLS)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -tls-key string           TLS key file\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -mtls-ca string           client CA PEM to require/verify client certs\n\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -upstream string          upstream SOCKS5 (host:port) to chain through (optional)\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -upstream-user string     username for upstream SOCKS5 auth (optional)\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -upstream-pass string     password for upstream SOCKS5 auth (optional)\n\n")
 	_, _ = fmt.Fprintf(os.Stderr, "Dial flags:\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -socks string             SOCKS server address (host:port)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -dest string              final destination (host:port)\n")
@@ -96,15 +101,18 @@ func serverCmd(args []string) {
 }
 
 type serverFlags struct {
-	listen  string
-	user    string
-	pass    string
-	bindIP  string
-	hs      string
-	ka      string
-	tlsCert string
-	tlsKey  string
-	mtlsCA  string
+	listen       string
+	user         string
+	pass         string
+	bindIP       string
+	hs           string
+	ka           string
+	tlsCert      string
+	tlsKey       string
+	mtlsCA       string
+	upstream     string
+	upstreamUser string
+	upstreamPass string
 }
 
 func parseServerFlags(args []string) serverFlags {
@@ -118,17 +126,23 @@ func parseServerFlags(args []string) serverFlags {
 	tlsCert := fs.String("tls-cert", "", "TLS cert file (enables TLS)")
 	tlsKey := fs.String("tls-key", "", "TLS key file")
 	mtlsCA := fs.String("mtls-ca", "", "client CA file for mTLS")
+	upstream := fs.String("upstream", "", "upstream SOCKS5 (host:port) to chain through")
+	upUser := fs.String("upstream-user", "", "username for upstream SOCKS5 auth (optional)")
+	upPass := fs.String("upstream-pass", "", "password for upstream SOCKS5 auth (optional)")
 	_ = fs.Parse(args)
 	return serverFlags{
-		listen:  *listen,
-		user:    *user,
-		pass:    *pass,
-		bindIP:  *bindIP,
-		hs:      *hs,
-		ka:      *ka,
-		tlsCert: *tlsCert,
-		tlsKey:  *tlsKey,
-		mtlsCA:  *mtlsCA,
+		listen:       *listen,
+		user:         *user,
+		pass:         *pass,
+		bindIP:       *bindIP,
+		hs:           *hs,
+		ka:           *ka,
+		tlsCert:      *tlsCert,
+		tlsKey:       *tlsKey,
+		mtlsCA:       *mtlsCA,
+		upstream:     *upstream,
+		upstreamUser: *upUser,
+		upstreamPass: *upPass,
 	}
 }
 
@@ -150,6 +164,27 @@ func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
 	}
 	if d := parseDuration(cfg.ka); d > 0 {
 		opts = append(opts, server.WithTCPKeepAlive(d))
+	}
+
+	if cfg.upstream != "" {
+		var authInfo *proxy.Auth
+		if cfg.upstreamUser != "" || cfg.upstreamPass != "" {
+			authInfo = &proxy.Auth{User: cfg.upstreamUser, Password: cfg.upstreamPass}
+		}
+		upstream, err := proxy.SOCKS5("tcp", cfg.upstream, authInfo, &net.Dialer{Timeout: 10 * time.Second})
+		if err != nil {
+			return nil, fmt.Errorf("create upstream socks5 dialer: %w", err)
+		}
+		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+			type ctxDialer interface {
+				DialContext(context.Context, string, string) (net.Conn, error)
+			}
+			if d, ok := upstream.(ctxDialer); ok {
+				return d.DialContext(ctx, network, addr)
+			}
+			return upstream.Dial(network, addr)
+		}
+		opts = append(opts, server.WithDial(dial))
 	}
 	return opts, nil
 }

@@ -50,6 +50,7 @@ Features
 - TCP options: handshake timeout, TCP keep‑alive
 - BIND tuning: bind IP, accept timeout, peer validation mode
 - UDP ASSOCIATE: udp4/udp6 selection, FQDN handling, peer limits with idle GC, optional bind IP
+- Server-side upstream chaining via CLI `-upstream` flag
 - I/O performance: buffer pool, fast-paths, half-close, duplex proxy
 - Logging and goroutine pool (GPool) integration
 - Graceful shutdown hooks: ServeContext, per-connection contexts/metadata, and ConnState callbacks
@@ -83,6 +84,11 @@ go build -o s5 ./cmd/s5
 - With TLS and optional mTLS:
 ```
 ./s5 server -listen :1080 -tls-cert cert.pem -tls-key key.pem -mtls-ca ca.pem
+```
+- Chain through an upstream SOCKS5 hop (with optional auth):
+```
+./s5 server -listen :1080 -upstream 1.2.3.4:1080
+./s5 server -listen :1080 -upstream 1.2.3.4:1080 -upstream-user alice -upstream-pass secret
 ```
 - Test a CONNECT via the client helper (prints response to stdout):
 ```
