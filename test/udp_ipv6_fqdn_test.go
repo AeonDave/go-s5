@@ -21,7 +21,9 @@ import (
 // IPv6-only hosts become unreachable.
 func TestUDP_FQDNTarget_IPv6Only(t *testing.T) {
 	backend, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
-	require.NoError(t, err)
+	if err != nil {
+		t.Skipf("IPv6 UDP not available: %v", err)
+	}
 	defer backend.Close()
 
 	backendAddr := backend.LocalAddr().(*net.UDPAddr)
