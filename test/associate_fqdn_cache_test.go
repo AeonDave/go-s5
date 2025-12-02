@@ -124,7 +124,7 @@ func TestSOCKS5_Associate_FQDN_UsesResolvedIPForCacheKey(t *testing.T) {
 	v4Addr, stopV4 := startUDPBackend(t, "udp4", "127.0.0.1:0", []byte("v4"))
 	defer stopV4()
 
-	v6Addr, stopV6 := startUDPBackend(t, "udp6", fmt.Sprintf("[::1]:%d", v4Addr.Port), []byte("v6"))
+	v6Addr, stopV6 := startUDPBackend(t, "udp6", "[::1]:0", []byte("v6"))
 	defer stopV6()
 
 	mockDNS.Update(fqdn, v4Addr.IP)
