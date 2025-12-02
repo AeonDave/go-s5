@@ -17,6 +17,7 @@ import (
 
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/client"
+	"github.com/AeonDave/go-s5/linkquality"
 	"github.com/AeonDave/go-s5/protocol"
 	"github.com/AeonDave/go-s5/server"
 )
@@ -46,6 +47,8 @@ func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, "  -pass string              password for User/Pass auth (optional)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -handshake-timeout string handshake timeout, e.g. 5s (optional)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -io-timeout string        per-request I/O timeout, e.g. 10s (optional)\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -linkquality              show live link quality metrics for the session\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -linkquality-interval     interval for link quality updates (default 5s)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -stdio                    pipe stdin->dest and dest->stdout\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -send string              send string once, then print response\n")
 }
@@ -224,6 +227,8 @@ func dialCmd(args []string) {
 	pass := fs.String("pass", "", "password for auth")
 	hs := fs.String("handshake-timeout", "", "handshake timeout (e.g. 5s)")
 	ioTO := fs.String("io-timeout", "", "I/O timeout (e.g. 10s)")
+	showLQ := fs.Bool("linkquality", false, "show live link quality metrics for this session")
+	lqInterval := fs.Duration("linkquality-interval", 5*time.Second, "interval for link quality updates")
 	stdio := fs.Bool("stdio", false, "pipe stdin/stdout")
 	send := fs.String("send", "", "send string then print response")
 	_ = fs.Parse(args)
@@ -233,9 +238,17 @@ func dialCmd(args []string) {
 		os.Exit(2)
 	}
 	// TCP to SOCKS server
+	dialStart := time.Now()
 	conn, err := net.Dial("tcp", *socks)
 	if err != nil {
 		log.Fatalf("dial socks: %v", err)
+	}
+
+	var tracker *linkquality.Tracker
+	if *showLQ {
+		tracker = linkquality.NewTracker(linkquality.Metadata{RemoteAddr: *socks, Kind: linkquality.EndpointSOCKS5})
+		tracker.RecordProbe(time.Since(dialStart), nil)
+		conn = linkquality.WrapConn(conn, tracker)
 	}
 	defer func(conn net.Conn) {
 		_ = conn.Close()
@@ -256,8 +269,15 @@ func dialCmd(args []string) {
 	}
 	ctx, cancel := ctxWithTimeout(*hs)
 	defer cancel()
+	hsStart := time.Now()
 	if _, err = cli.Handshake(ctx, conn, creds); err != nil {
+		if tracker != nil {
+			tracker.RecordProbe(time.Since(hsStart), err)
+		}
 		log.Fatalf("handshake: %v", err)
+	}
+	if tracker != nil {
+		tracker.RecordProbe(time.Since(hsStart), nil)
 	}
 	dst, err := protocol.ParseAddrSpec(*dest)
 	if err != nil {
@@ -265,14 +285,30 @@ func dialCmd(args []string) {
 	}
 	ctx2, cancel2 := ctxWithTimeout(*ioTO)
 	defer cancel2()
+	connStart := time.Now()
 	if _, err = cli.Connect(ctx2, conn, dst); err != nil {
+		if tracker != nil {
+			tracker.RecordProbe(time.Since(connStart), err)
+		}
 		log.Fatalf("connect failed")
+	}
+	if tracker != nil {
+		tracker.RecordProbe(time.Since(connStart), nil)
+	}
+
+	var stopMetrics chan struct{}
+	if tracker != nil {
+		stopMetrics = make(chan struct{})
+		go displayLinkQuality(tracker, *lqInterval, stopMetrics)
 	}
 
 	if *stdio {
 		// pipe stdin->conn and conn->stdout
 		go func() { _, _ = io.Copy(conn, os.Stdin); _ = halfCloseWrite(conn) }()
 		_, _ = io.Copy(os.Stdout, conn)
+		if stopMetrics != nil {
+			close(stopMetrics)
+		}
 		return
 	}
 	if *send != "" {
@@ -282,9 +318,15 @@ func dialCmd(args []string) {
 		_ = conn.SetReadDeadline(time.Now().Add(parseDuration(*ioTO)))
 		_, _ = io.Copy(os.Stdout, conn)
 		_ = conn.SetReadDeadline(time.Time{})
+		if stopMetrics != nil {
+			close(stopMetrics)
+		}
 		return
 	}
 	fmt.Println("connected (no stdio/send specified)")
+	if stopMetrics != nil {
+		close(stopMetrics)
+	}
 }
 
 func ctxWithTimeout(s string) (context.Context, context.CancelFunc) {
@@ -304,4 +346,40 @@ func halfCloseWrite(c net.Conn) error {
 		return x.CloseWrite()
 	}
 	return nil
+}
+
+func displayLinkQuality(tr *linkquality.Tracker, interval time.Duration, stop <-chan struct{}) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	printSnapshot(tr)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			printSnapshot(tr)
+		case <-stop:
+			return
+		}
+	}
+}
+
+func printSnapshot(tr *linkquality.Tracker) {
+	info := tr.ConnectionInfo()
+	jit := info.Jitter
+	if jit == 0 {
+		jit = info.RTT.StdDev
+	}
+	throughput := "-"
+	if info.Throughput.Samples > 0 {
+		throughput = fmt.Sprintf("%.1f KB/s (peak %.1f)", info.Throughput.AverageBps/1024, info.Throughput.MaxBps/1024)
+	}
+	uptime := fmt.Sprintf("%.1f%%", info.UptimeRatio*100)
+	latency := "-"
+	if info.RTT.Avg > 0 {
+		latency = fmt.Sprintf("min/avg/max %s/%s/%s", info.RTT.Min, info.RTT.Avg, info.RTT.Max)
+	}
+	fmt.Fprintf(os.Stderr, "[linkquality] score=%d | success=%d/%d | uptime=%s\n", info.Composite, info.Success, info.Probes, uptime)
+	fmt.Fprintf(os.Stderr, "[linkquality] latency: %s | jitter: %s | throughput: %s\n", latency, jit, throughput)
 }
