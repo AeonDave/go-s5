@@ -164,8 +164,15 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 		return
 	}
 
-	dialNet, dialAddr := sf.selectUDPDial(&pk)
-	targetNew, err := sf.dialOut(ctx, dialNet, dialAddr, request)
+	dialNets, dialAddr := sf.selectUDPDial(srcAddr, &pk)
+	var targetNew net.Conn
+	var err error
+	for _, dialNet := range dialNets {
+		targetNew, err = sf.dialOut(ctx, dialNet, dialAddr, request)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		sf.logger.Errorf("connect to %v failed, %v", pk.DstAddr, err)
 		return
@@ -196,12 +203,25 @@ func (sf *Server) reachUDPMaxPeers(conns *sync.Map) bool {
 	return cur >= sf.udpMaxPeers
 }
 
-func (sf *Server) selectUDPDial(pk *protocol.Datagram) (network, addr string) {
+func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, pk *protocol.Datagram) (networks []string, addr string) {
 	addr = pk.DstAddr.String()
-	network = "udp"
 	if pk.DstAddr.FQDN != "" {
 		addr = net.JoinHostPort(pk.DstAddr.FQDN, strconv.Itoa(pk.DstAddr.Port))
 	}
+
+	switch pk.DstAddr.AddrType {
+	case protocol.ATYPIPv4:
+		networks = []string{"udp4"}
+	case protocol.ATYPIPv6:
+		networks = []string{"udp6"}
+	default:
+		if srcAddr != nil && srcAddr.IP.To4() != nil {
+			networks = []string{"udp4", "udp6"}
+		} else {
+			networks = []string{"udp6", "udp4"}
+		}
+	}
+
 	return
 }
 
