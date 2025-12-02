@@ -11,12 +11,14 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
 
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/client"
+	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/linkquality"
 	"github.com/AeonDave/go-s5/protocol"
 	"github.com/AeonDave/go-s5/server"
@@ -178,7 +180,11 @@ func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
 		if err != nil {
 			return nil, fmt.Errorf("create upstream socks5 dialer: %w", err)
 		}
-		dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dial := func(ctx context.Context, network, addr string, req *handler.Request) (net.Conn, error) {
+			if strings.HasPrefix(network, "udp") {
+				var d net.Dialer
+				return d.DialContext(ctx, network, addr)
+			}
 			type ctxDialer interface {
 				DialContext(context.Context, string, string) (net.Conn, error)
 			}
@@ -187,7 +193,7 @@ func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
 			}
 			return upstream.Dial(network, addr)
 		}
-		opts = append(opts, server.WithDial(dial))
+		opts = append(opts, server.WithDialAndRequest(dial))
 	}
 	return opts, nil
 }

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestTrackerAggregatesMetrics(t *testing.T) {
@@ -127,4 +129,34 @@ func TestWrapConnIsTransparent(t *testing.T) {
 	if info.Throughput.Samples == 0 || info.Throughput.TotalBytes == 0 {
 		t.Fatalf("throughput not recorded: %+v", info.Throughput)
 	}
+}
+
+type closeWriterConn struct {
+	net.Conn
+	called bool
+}
+
+func (c *closeWriterConn) CloseWrite() error {
+	c.called = true
+	if cw, ok := c.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
+func TestWrapConnPreservesCloseWrite(t *testing.T) {
+	tracker := NewTracker(Metadata{Kind: EndpointTCP})
+	client, server := net.Pipe()
+	t.Cleanup(func() {
+		_ = client.Close()
+		_ = server.Close()
+	})
+
+	cw := &closeWriterConn{Conn: client}
+	wrapped := WrapConn(cw, tracker)
+
+	halfCloser, ok := wrapped.(interface{ CloseWrite() error })
+	require.True(t, ok, "wrapped connection should expose CloseWrite")
+	require.NoError(t, halfCloser.CloseWrite())
+	require.True(t, cw.called, "underlying CloseWrite should be invoked")
 }
