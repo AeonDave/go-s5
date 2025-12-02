@@ -49,8 +49,12 @@ func ParseAddrSpec(addr string) (AddrSpec, error) {
 	}
 }
 
-
 func AddrTypeFromIP(ip net.IP) byte {
+	// Treat nil as unknown instead of assuming IPv4 so callers can react to the
+	// absence of an address type.
+	if ip == nil {
+		return ATYPDomain
+	}
 	if ip.To4() != nil {
 		return ATYPIPv4
 	}

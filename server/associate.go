@@ -80,6 +80,7 @@ func (sf *Server) udpBindAddrForAssociate(request *handler.Request) *net.UDPAddr
 
 func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, request *handler.Request) {
 	conns := &sync.Map{}
+	resolvedCache := &sync.Map{}
 	buf, put := sf.borrowBuf()
 	defer func() {
 		put()
@@ -94,7 +95,7 @@ func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, req
 		})
 	}()
 
-	stop := sf.startUDPIdleReaper(conns)
+	stop := sf.startUDPIdleReaper(conns, resolvedCache)
 	if stop != nil {
 		defer stop()
 	}
@@ -104,7 +105,7 @@ func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, req
 		if !ok {
 			return
 		}
-		sf.handleUDPDatagram(ctx, bindLn, conns, srcAddr, pk, request)
+		sf.handleUDPDatagram(ctx, bindLn, conns, resolvedCache, srcAddr, pk, request)
 	}
 }
 
@@ -132,7 +133,12 @@ func (sf *Server) nextValidUDP(bindLn *net.UDPConn, buf []byte, request *handler
 	}
 }
 
-func (sf *Server) startUDPIdleReaper(conns *sync.Map) func() {
+type resolvedEntry struct {
+	addr     protocol.AddrSpec
+	lastSeen int64
+}
+
+func (sf *Server) startUDPIdleReaper(conns *sync.Map, resolvedCache *sync.Map) func() {
 	if sf.udpIdleTimeout <= 0 {
 		return nil
 	}
@@ -152,6 +158,16 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map) func() {
 					}
 					return true
 				})
+				if resolvedCache != nil {
+					resolvedCache.Range(func(key, value any) bool {
+						if entry, ok := value.(*resolvedEntry); ok {
+							if atomic.LoadInt64(&entry.lastSeen) < deadline {
+								resolvedCache.Delete(key)
+							}
+						}
+						return true
+					})
+				}
 			case <-stopCh:
 				return
 			}
@@ -160,13 +176,26 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map) func() {
 	return func() { ticker.Stop(); close(stopCh) }
 }
 
-func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
-	dstAddr := pk.DstAddr
+func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, resolvedCache *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
+	dstAddr := pk.DstAddr // Value copy: struct assignment in Go creates a copy, not an alias
+	now := time.Now().UnixNano()
+	var flowKey string
 	if dstAddr.FQDN != "" {
+		flowKey = srcAddr.String() + "--" + dstAddr.FQDN + ":" + strconv.Itoa(dstAddr.Port)
 		_, ip, err := sf.resolver.Resolve(ctx, dstAddr.FQDN)
 		if err == nil && ip != nil {
 			dstAddr.IP = ip
 			dstAddr.AddrType = protocol.AddrTypeFromIP(ip)
+			dstAddr.FQDN = ""
+			resolvedCache.Store(flowKey, &resolvedEntry{addr: dstAddr, lastSeen: now})
+		} else if err != nil {
+			sf.logger.Errorf("resolve %s failed: %v", dstAddr.FQDN, err)
+			if cached, ok := resolvedCache.Load(flowKey); ok {
+				if cachedEntry, ok := cached.(*resolvedEntry); ok {
+					dstAddr = cachedEntry.addr
+					atomic.StoreInt64(&cachedEntry.lastSeen, now)
+				}
+			}
 		}
 	}
 
@@ -180,6 +209,13 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 			return
 		}
 		atomic.StoreInt64(&p.lastSeen, time.Now().UnixNano())
+		if flowKey != "" {
+			if cached, ok := resolvedCache.Load(flowKey); ok {
+				if cachedEntry, ok := cached.(*resolvedEntry); ok {
+					atomic.StoreInt64(&cachedEntry.lastSeen, time.Now().UnixNano())
+				}
+			}
+		}
 		return
 	}
 
