@@ -228,7 +228,7 @@ func (sf *Server) reachUDPMaxPeers(conns *sync.Map) bool {
 
 func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, dstAddr *protocol.AddrSpec) (networks []string, addr string) {
 	addr = dstAddr.String()
-	if dstAddr.FQDN != "" {
+	if dstAddr.FQDN != "" && len(dstAddr.IP) == 0 {
 		addr = net.JoinHostPort(dstAddr.FQDN, strconv.Itoa(dstAddr.Port))
 	}
 
