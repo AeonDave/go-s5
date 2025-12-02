@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -295,21 +296,22 @@ func (sf *Server) enrichAuthFromTLS(conn net.Conn, authContext *auth.AContext) {
 	if len(leaf.DNSNames) > 0 {
 		authContext.Payload["tls.san.dns"] = leaf.DNSNames[0]
 	}
-	if ip := firstIPFromCert(leaf); ip != "" {
-		authContext.Payload["tls.san.ip"] = ip
+	if ips := allIPsFromCert(leaf); len(ips) > 0 {
+		authContext.Payload["tls.san.ip"] = strings.Join(ips, ",")
 	}
 	sum := sha256.Sum256(leaf.Raw)
 	authContext.Payload["tls.fingerprint.sha256"] = hex.EncodeToString(sum[:])
 }
 
-func firstIPFromCert(cert *x509.Certificate) string {
-	if cert == nil {
-		return ""
+func allIPsFromCert(cert *x509.Certificate) []string {
+	if cert == nil || len(cert.IPAddresses) == 0 {
+		return nil
 	}
-	if len(cert.IPAddresses) > 0 {
-		return cert.IPAddresses[0].String()
+	res := make([]string, 0, len(cert.IPAddresses))
+	for _, ip := range cert.IPAddresses {
+		res = append(res, ip.String())
 	}
-	return ""
+	return res
 }
 
 func (sf *Server) authenticate(conn io.Writer, bufConn io.Reader, userAddr string, methods []byte) (*auth.AContext, error) {

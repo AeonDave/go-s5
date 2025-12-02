@@ -177,3 +177,74 @@ func TestTLS_MutualAuth_FailsWithoutClientCert(t *testing.T) {
 	err = tc.Handshake()
 	require.Error(t, err)
 }
+
+// Ensure all IPs from client cert SANs are exposed in AuthContext payload.
+func TestTLS_MutualAuth_ExposesAllSANIPs(t *testing.T) {
+	ca, caKey := genCA(t)
+	srvCert, _ := genCert(t, ca, caKey, "server", false, []net.IP{net.ParseIP("127.0.0.1")}, nil)
+	// Client cert with multiple SAN IPs
+	clientIPs := []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("198.51.100.1")}
+	cliCert, _ := genCert(t, ca, caKey, "client-multi-ip", true, clientIPs, nil)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(ca)
+
+	tlsCfg := &tls.Config{
+		Certificates: []tls.Certificate{srvCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+	}
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", tlsCfg)
+	require.NoError(t, err)
+
+	// Custom connect handler echoes tls.san.ip payload
+	srv := server.New(
+		server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))),
+		server.WithConnectHandle(func(ctx context.Context, w io.Writer, r *socks5_handler.Request) error {
+			_ = server.SendReply(w, protocol.RepSuccess, &net.TCPAddr{IP: net.IPv4zero, Port: 0})
+			ipPayload := ""
+			if r.AuthContext != nil {
+				ipPayload = r.AuthContext.Payload["tls.san.ip"]
+			}
+			_, _ = w.Write([]byte(ipPayload))
+			return nil
+		}),
+	)
+
+	done := make(chan struct{})
+	go func() { defer close(done); _ = srv.Serve(ln) }()
+	defer func() { _ = ln.Close(); <-done }()
+
+	clientTLS := &tls.Config{Certificates: []tls.Certificate{cliCert}, RootCAs: pool}
+	c, err := tls.Dial("tcp", ln.Addr().String(), clientTLS)
+	require.NoError(t, err)
+	defer func(c *tls.Conn) {
+		_ = c.Close()
+	}(c)
+
+	_, _ = c.Write([]byte{protocol.VersionSocks5, 1, protocol.MethodNoAuth})
+	m := make([]byte, 2)
+	_, err = io.ReadFull(c, m)
+	require.NoError(t, err)
+
+	req := bytes.NewBuffer(nil)
+	head := protocol.Request{Version: protocol.VersionSocks5, Command: protocol.CommandConnect, DstAddr: protocol.AddrSpec{IP: net.IPv4zero, Port: 0, AddrType: protocol.ATYPIPv4}}
+	req.Write(head.Bytes())
+	_, _ = c.Write(req.Bytes())
+
+	rep, err := protocol.ParseReply(c)
+	require.NoError(t, err)
+	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+
+	buf := make([]byte, 256)
+	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	n, err := c.Read(buf)
+	_ = c.SetReadDeadline(time.Time{})
+	require.NoError(t, err)
+
+	// Expect comma-separated list of all IPs
+	body := string(buf[:n])
+	require.Contains(t, body, "192.0.2.1")
+	require.Contains(t, body, "198.51.100.1")
+}
