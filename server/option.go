@@ -9,6 +9,7 @@ import (
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/buffer"
+	"github.com/AeonDave/go-s5/linkquality"
 	"github.com/AeonDave/go-s5/resolver"
 	"github.com/AeonDave/go-s5/rules"
 )
@@ -166,4 +167,14 @@ func WithConnState(fn func(net.Conn, ConnState)) Option {
 // The returned map is shallow-copied per connection.
 func WithConnMetadata(fn func(net.Conn) map[string]string) Option {
 	return func(s *Server) { s.connMetadata = fn }
+}
+
+// WithConnectionLogging enables or disables per-connection accept/close logs.
+func WithConnectionLogging(enabled bool) Option {
+	return func(s *Server) { s.logConnections = enabled }
+}
+
+// WithLinkQuality enables link quality tracking for outbound hops.
+func WithLinkQuality(tr *linkquality.Tracker) Option {
+	return func(s *Server) { s.linkTracker = tr }
 }

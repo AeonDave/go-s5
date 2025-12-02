@@ -100,8 +100,9 @@ func TestServerOptionsFromConfig_UpstreamDialer(t *testing.T) {
 		defer stopUpstream()
 
 		cfg := serverFlags{upstream: upstreamListen}
-		opts, err := serverOptionsFromConfig(cfg)
+		opts, tracker, err := serverOptionsFromConfig(cfg)
 		require.NoError(t, err)
+		require.Nil(t, tracker)
 
 		listen, stop := startCLIServer(t, opts...)
 		defer stop()
@@ -121,8 +122,9 @@ func TestServerOptionsFromConfig_UpstreamDialer(t *testing.T) {
 		defer stopUpstream()
 
 		cfg := serverFlags{upstream: upstreamListen, upstreamUser: "alice", upstreamPass: "secret"}
-		opts, err := serverOptionsFromConfig(cfg)
+		opts, tracker, err := serverOptionsFromConfig(cfg)
 		require.NoError(t, err)
+		require.Nil(t, tracker)
 
 		listen, stop := startCLIServer(t, opts...)
 		defer stop()
@@ -142,8 +144,9 @@ func TestServerOptionsFromConfig_UpstreamDialer(t *testing.T) {
 		defer stopUpstream()
 
 		cfg := serverFlags{upstream: upstreamListen}
-		opts, err := serverOptionsFromConfig(cfg)
+		opts, tracker, err := serverOptionsFromConfig(cfg)
 		require.NoError(t, err)
+		require.Nil(t, tracker)
 
 		listen, stop := startCLIServer(t, opts...)
 		defer stop()
@@ -170,7 +173,9 @@ func TestServerOptionsFromConfig_UpstreamDialer(t *testing.T) {
 	t.Run("udp_associate_bypasses_upstream", func(t *testing.T) {
 		backend, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 		require.NoError(t, err)
-		defer backend.Close()
+		defer func(backend *net.UDPConn) {
+			_ = backend.Close()
+		}(backend)
 
 		done := make(chan struct{})
 		go func() {
@@ -186,8 +191,9 @@ func TestServerOptionsFromConfig_UpstreamDialer(t *testing.T) {
 		}()
 
 		cfg := serverFlags{upstream: "127.0.0.1:9"}
-		opts, err := serverOptionsFromConfig(cfg)
+		opts, tracker, err := serverOptionsFromConfig(cfg)
 		require.NoError(t, err)
+		require.Nil(t, tracker)
 
 		listen, stop := startCLIServer(t, opts...)
 		defer stop()

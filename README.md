@@ -82,6 +82,10 @@ go build -o s5 ./cmd/s5
 ```
 ./s5 server -listen :1080 -user alice -pass secret -handshake-timeout 5s -tcp-keepalive 30s
 ```
+- Log accepts/closes (optional):
+```
+./s5 server -listen :1080 -log-connections
+```
 - With TLS and optional mTLS:
 ```
 ./s5 server -listen :1080 -tls-cert cert.pem -tls-key key.pem -mtls-ca ca.pem
@@ -90,6 +94,11 @@ go build -o s5 ./cmd/s5
 ```
 ./s5 server -listen :1080 -upstream 1.2.3.4:1080
 ./s5 server -listen :1080 -upstream 1.2.3.4:1080 -upstream-user alice -upstream-pass secret
+```
+- Track outbound hop quality (direct or upstream) and print periodic snapshots:
+```
+./s5 server -listen :1080 -linkquality -linkquality-interval 3s
+./s5 server -listen :1080 -upstream 1.2.3.4:1080 -linkquality -linkquality-interval 3s
 ```
 - Test a CONNECT via the client helper (prints response to stdout):
 ```
@@ -292,6 +301,15 @@ _ = info
 The tracker is designed to stay out of the way: it only observes timings and
 byte counts already flowing through the connection and holds a minimal mutex to
 avoid contention in high-throughput scenarios.
+
+Server side: you can enable linkquality for outbound hops by passing a tracker
+into the server (`server.WithLinkQuality(tr)` or `srv.LinkQualityTracker()` if
+created by the CLI) and reading `tr.Score()` or `tr.ConnectionInfo()` whenever
+you need to rank/inspect routes. The `s5 server` CLI also supports
+`-linkquality`/`-linkquality-interval`, emitting the same stderr snapshots for
+direct dials or upstream chains, so you can monitor hop health without touching
+the traffic. To log connection accepts/closes with peer addresses, pass
+`-log-connections` (CLI) or use `server.WithConnectionLogging(true)` in code.
 
 To view live quality snapshots when using the bundled CLI, start `s5 dial` with
 `-linkquality` (and optionally `-linkquality-interval 2s`). The tool will print

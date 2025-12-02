@@ -7,7 +7,7 @@
 - Check the `go.mod` file to confirm module name and dependencies.
 
 ## Project Structure
-- `server/` – TCP server, method negotiation, CONNECT/BIND/ASSOCIATE handlers.
+- `server/` - TCP server, method negotiation, CONNECT/BIND/ASSOCIATE handlers; options include upstream chaining, connection logging, and linkquality tracker injection.
 - `handler/` – Request façade and middleware chains.
 - `protocol/` – Public wire-level structs.
 - `internal/protocol` – Server-only fast paths.

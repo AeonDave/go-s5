@@ -38,10 +38,13 @@ func usage() {
 	_, _ = fmt.Fprintf(os.Stderr, "  -tcp-keepalive string     TCP keep-alive period, e.g. 30s (optional)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -tls-cert string          TLS cert file (enables TLS)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -tls-key string           TLS key file\n")
-	_, _ = fmt.Fprintf(os.Stderr, "  -mtls-ca string           client CA PEM to require/verify client certs\n\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -mtls-ca string           client CA PEM to require/verify client certs\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -log-connections          log accepts/closes with peer addresses\n\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -upstream string          upstream SOCKS5 (host:port) to chain through (optional)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -upstream-user string     username for upstream SOCKS5 auth (optional)\n")
-	_, _ = fmt.Fprintf(os.Stderr, "  -upstream-pass string     password for upstream SOCKS5 auth (optional)\n\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -upstream-pass string     password for upstream SOCKS5 auth (optional)\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -linkquality              track link quality for outbound hops\n")
+	_, _ = fmt.Fprintf(os.Stderr, "  -linkquality-interval     interval for link quality updates (default 5s)\n\n")
 	_, _ = fmt.Fprintf(os.Stderr, "Dial flags:\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -socks string             SOCKS server address (host:port)\n")
 	_, _ = fmt.Fprintf(os.Stderr, "  -dest string              final destination (host:port)\n")
@@ -89,7 +92,7 @@ func parseDuration(s string) time.Duration {
 
 func serverCmd(args []string) {
 	cfg := parseServerFlags(args)
-	opts, err := serverOptionsFromConfig(cfg)
+	opts, tracker, err := serverOptionsFromConfig(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -98,11 +101,25 @@ func serverCmd(args []string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if tlsCfg != nil {
-		log.Fatalf("%v", srv.ListenAndServeTLS("tcp", cfg.listen, tlsCfg))
-		return
+
+	var stopMetrics chan struct{}
+	if tracker != nil {
+		stopMetrics = make(chan struct{})
+		go displayLinkQuality(tracker, cfg.lqInterval, stopMetrics)
 	}
-	log.Fatalf("%v", srv.ListenAndServe("tcp", cfg.listen))
+
+	if tlsCfg != nil {
+		err = srv.ListenAndServeTLS("tcp", cfg.listen, tlsCfg)
+		if stopMetrics != nil {
+			close(stopMetrics)
+		}
+		log.Fatalf("%v", err)
+	}
+	err = srv.ListenAndServe("tcp", cfg.listen)
+	if stopMetrics != nil {
+		close(stopMetrics)
+	}
+	log.Fatalf("%v", err)
 }
 
 type serverFlags struct {
@@ -118,6 +135,9 @@ type serverFlags struct {
 	upstream     string
 	upstreamUser string
 	upstreamPass string
+	logConns     bool
+	linkquality  bool
+	lqInterval   time.Duration
 }
 
 func parseServerFlags(args []string) serverFlags {
@@ -134,6 +154,9 @@ func parseServerFlags(args []string) serverFlags {
 	upstream := fs.String("upstream", "", "upstream SOCKS5 (host:port) to chain through")
 	upUser := fs.String("upstream-user", "", "username for upstream SOCKS5 auth (optional)")
 	upPass := fs.String("upstream-pass", "", "password for upstream SOCKS5 auth (optional)")
+	logConns := fs.Bool("log-connections", false, "log accepts/closes with peer addresses")
+	lq := fs.Bool("linkquality", false, "track link quality for outbound hops")
+	lqInterval := fs.Duration("linkquality-interval", 5*time.Second, "interval for link quality updates")
 	_ = fs.Parse(args)
 	return serverFlags{
 		listen:       *listen,
@@ -148,19 +171,23 @@ func parseServerFlags(args []string) serverFlags {
 		upstream:     *upstream,
 		upstreamUser: *upUser,
 		upstreamPass: *upPass,
+		logConns:     *logConns,
+		linkquality:  *lq,
+		lqInterval:   *lqInterval,
 	}
 }
 
-func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
+func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, *linkquality.Tracker, error) {
 	var opts []server.Option
 	opts = append(opts, server.WithLogger(server.NewLogger(log.New(os.Stdout, "socks5: ", log.LstdFlags))))
+	opts = append(opts, server.WithConnectionLogging(cfg.logConns))
 	if cfg.user != "" || cfg.pass != "" {
 		opts = append(opts, server.WithCredential(auth.StaticCredentials{cfg.user: cfg.pass}))
 	}
 	if cfg.bindIP != "" {
 		ip := net.ParseIP(cfg.bindIP)
 		if ip == nil {
-			return nil, fmt.Errorf("invalid bind IP: %s", cfg.bindIP)
+			return nil, nil, fmt.Errorf("invalid bind IP: %s", cfg.bindIP)
 		}
 		opts = append(opts, server.WithBindIP(ip))
 	}
@@ -178,7 +205,7 @@ func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
 		}
 		upstream, err := proxy.SOCKS5("tcp", cfg.upstream, authInfo, &net.Dialer{Timeout: 10 * time.Second})
 		if err != nil {
-			return nil, fmt.Errorf("create upstream socks5 dialer: %w", err)
+			return nil, nil, fmt.Errorf("create upstream socks5 dialer: %w", err)
 		}
 		dial := func(ctx context.Context, network, addr string, req *handler.Request) (net.Conn, error) {
 			if strings.HasPrefix(network, "udp") {
@@ -195,7 +222,19 @@ func serverOptionsFromConfig(cfg serverFlags) ([]server.Option, error) {
 		}
 		opts = append(opts, server.WithDialAndRequest(dial))
 	}
-	return opts, nil
+
+	var tracker *linkquality.Tracker
+	if cfg.linkquality {
+		meta := linkquality.Metadata{Kind: linkquality.EndpointTCP, Notes: "server outbound"}
+		if cfg.upstream != "" {
+			meta.Kind = linkquality.EndpointSOCKS5
+			meta.RemoteAddr = cfg.upstream
+			meta.Notes = "server upstream"
+		}
+		tracker = linkquality.NewTracker(meta)
+		opts = append(opts, server.WithLinkQuality(tracker))
+	}
+	return opts, tracker, nil
 }
 
 func tlsConfigFromFlags(cfg serverFlags) (*tls.Config, error) {
@@ -386,6 +425,6 @@ func printSnapshot(tr *linkquality.Tracker) {
 	if info.RTT.Avg > 0 {
 		latency = fmt.Sprintf("min/avg/max %s/%s/%s", info.RTT.Min, info.RTT.Avg, info.RTT.Max)
 	}
-	fmt.Fprintf(os.Stderr, "[linkquality] score=%d | success=%d/%d | uptime=%s\n", info.Composite, info.Success, info.Probes, uptime)
-	fmt.Fprintf(os.Stderr, "[linkquality] latency: %s | jitter: %s | throughput: %s\n", latency, jit, throughput)
+	_, _ = fmt.Fprintf(os.Stderr, "[linkquality] score=%d | success=%d/%d | uptime=%s\n", info.Composite, info.Success, info.Probes, uptime)
+	_, _ = fmt.Fprintf(os.Stderr, "[linkquality] latency: %s | jitter: %s | throughput: %s\n", latency, jit, throughput)
 }

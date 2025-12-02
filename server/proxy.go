@@ -8,9 +8,11 @@ import (
 	"net"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	"github.com/AeonDave/go-s5/linkquality"
 )
 
 type closeWriter interface {
@@ -171,17 +173,38 @@ func addrMatch(expect *protocol.AddrSpec, ip net.IP, port int, ipOnly bool) bool
 }
 
 func (sf *Server) dialOut(ctx context.Context, network, addr string, req *handler.Request) (net.Conn, error) {
+	start := time.Now()
+
+	dial := sf.selectDialer()
+	conn, err := dial(ctx, network, addr, req)
+
+	if sf.linkTracker != nil {
+		sf.linkTracker.RecordProbe(time.Since(start), err)
+		if err == nil {
+			conn = linkquality.WrapConn(conn, sf.linkTracker)
+		}
+	}
+	return conn, err
+}
+
+func (sf *Server) selectDialer() func(context.Context, string, string, *handler.Request) (net.Conn, error) {
 	if sf.dialWithRequest != nil {
-		return sf.dialWithRequest(ctx, network, addr, req)
+		return sf.dialWithRequest
 	}
 	if sf.dial != nil {
-		return sf.dial(ctx, network, addr)
+		return func(ctx context.Context, network, addr string, _ *handler.Request) (net.Conn, error) {
+			return sf.dial(ctx, network, addr)
+		}
 	}
 	if sf.dialer != nil {
-		return sf.dialer.DialContext(ctx, network, addr)
+		return func(ctx context.Context, network, addr string, _ *handler.Request) (net.Conn, error) {
+			return sf.dialer.DialContext(ctx, network, addr)
+		}
 	}
 	var d net.Dialer
-	return d.DialContext(ctx, network, addr)
+	return func(ctx context.Context, network, addr string, _ *handler.Request) (net.Conn, error) {
+		return d.DialContext(ctx, network, addr)
+	}
 }
 
 func mapConnectDialError(err error) uint8 {

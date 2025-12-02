@@ -116,6 +116,14 @@ func (c *measuredConn) CloseWrite() error {
 	return nil
 }
 
+func (c *measuredConn) CloseRead() error {
+	type closeReader interface{ CloseRead() error }
+	if cr, ok := c.Conn.(closeReader); ok {
+		return cr.CloseRead()
+	}
+	return nil
+}
+
 // NewTracker creates a monitor bound to the provided metadata.
 func NewTracker(meta Metadata) *Tracker {
 	now := time.Now()
@@ -392,6 +400,11 @@ func ProbeSOCKSHandshake(ctx context.Context, dial func(context.Context) (net.Co
 }
 
 func compositeScore(info ConnectionInfo) int {
+	// No observations yet: return 0 to signal lack of data.
+	if info.Probes == 0 && info.Throughput.Samples == 0 && info.RTT.Avg == 0 {
+		return 0
+	}
+
 	successScore := info.SuccessRate
 
 	var latencyScore float64
@@ -412,20 +425,23 @@ func compositeScore(info ConnectionInfo) int {
 		latencyScore = 0
 	}
 
-	jitterScore := 1.0
-	jitterMs := float64(info.Jitter.Milliseconds())
-	if jitterMs > 1 {
-		switch {
-		case jitterMs <= 10:
-			jitterScore = 1
-		case jitterMs <= 100:
-			jitterScore = 1 - (jitterMs-10)/90
-		default:
+	jitterScore := 0.0
+	if info.RTT.Avg > 0 {
+		jitterMs := float64(info.Jitter.Milliseconds())
+		jitterScore = 1.0
+		if jitterMs > 1 {
+			switch {
+			case jitterMs <= 10:
+				jitterScore = 1
+			case jitterMs <= 100:
+				jitterScore = 1 - (jitterMs-10)/90
+			default:
+				jitterScore = 0
+			}
+		}
+		if jitterScore < 0 {
 			jitterScore = 0
 		}
-	}
-	if jitterScore < 0 {
-		jitterScore = 0
 	}
 
 	throughputScore := 0.0

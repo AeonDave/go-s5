@@ -14,12 +14,14 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AeonDave/go-s5/auth"
 	"github.com/AeonDave/go-s5/handler"
 	"github.com/AeonDave/go-s5/internal/buffer"
 	"github.com/AeonDave/go-s5/internal/protocol"
+	"github.com/AeonDave/go-s5/linkquality"
 	"github.com/AeonDave/go-s5/resolver"
 	"github.com/AeonDave/go-s5/rules"
 )
@@ -62,10 +64,14 @@ type Server struct {
 	dialer                        *net.Dialer
 	udpMaxPeers                   int
 	udpIdleTimeout                time.Duration
+	logConnections                bool
 	baseContext                   func(net.Listener) context.Context
 	connContext                   func(ctx context.Context, conn net.Conn) context.Context
 	connStateHook                 func(net.Conn, ConnState)
 	connMetadata                  func(net.Conn) map[string]string
+
+	linkTracker *linkquality.Tracker
+	activeConns int64
 }
 
 func New(opts ...Option) *Server {
@@ -182,6 +188,10 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	connCtx := sf.decorateConnContext(ctx, conn)
 	cancelableCtx, cancel := context.WithCancel(connCtx)
 	sf.trackConnState(conn, StateNew)
+	active := atomic.AddInt64(&sf.activeConns, 1)
+	if sf.logConnections && sf.logger != nil {
+		sf.logger.Infof("accepted %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
+	}
 	sf.goFunc(func() {
 		defer cancel()
 		sf.trackConnState(conn, StateActive)
@@ -189,6 +199,10 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 			sf.logger.Errorf("server: %v", err)
 		}
 		sf.trackConnState(conn, StateClosed)
+		active := atomic.AddInt64(&sf.activeConns, -1)
+		if sf.logConnections && sf.logger != nil {
+			sf.logger.Infof("closed %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
+		}
 	})
 }
 
@@ -367,4 +381,9 @@ func (sf *Server) buildMetadata(conn net.Conn) map[string]string {
 		clone[k] = v
 	}
 	return clone
+}
+
+// LinkQualityTracker returns the tracker used for outbound hops, if enabled.
+func (sf *Server) LinkQualityTracker() *linkquality.Tracker {
+	return sf.linkTracker
 }
