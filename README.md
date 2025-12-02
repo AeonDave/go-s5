@@ -19,6 +19,7 @@ Contents
 - Options (With... API)
 - Client API (CONNECT/BIND/UDP, Multi-hop)
 - Client helper packages (TCP/UDP utilities)
+- Link quality monitoring
 - Examples
   - Basic server
   - Username/password
@@ -235,6 +236,72 @@ func main() {
     n, addr, _ := pc.ReadFrom(buf)
     fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
 }
+```
+
+Link quality monitoring
+-----------------------
+The `linkquality` package offers a lightweight, non-invasive tracker that reuses
+existing handshakes, keep-alives, and data transfers to estimate link health
+without injecting additional traffic or altering socket options. Key entry
+points:
+
+- `Tracker`: thread-safe accumulator exposed via `Score()` (0–100) and
+  `ConnectionInfo()` (detailed metrics: RTT/jitter, success rate, throughput,
+  uptime, metadata).
+- `RecordProbe`: call with the duration and error from an existing handshake or
+  TCP dial to register latency and success/failure without issuing new packets.
+- `WrapConn`: wraps any `net.Conn` to passively record throughput; it never
+  changes deadlines, keep-alive state, or TLS settings and simply mirrors reads
+  and writes while timing them.
+- `ProbeTCP` / `ProbeSOCKSHandshake`: optional helpers that run bounded health
+  checks when you explicitly need active measurements (e.g., periodic scoring
+  against an idle hop). Use contexts/timeouts to keep probes short-lived.
+
+Example: track a SOCKS handshake and the resulting data stream without
+increasing traffic volume:
+
+```go
+import (
+    "time"
+
+    "github.com/AeonDave/go-s5/client"
+    "github.com/AeonDave/go-s5/linkquality"
+)
+
+tracker := linkquality.NewTracker(linkquality.Metadata{
+    Name: "exit-eu-1",
+    Kind: linkquality.EndpointSOCKS5,
+    TLS:  true,
+})
+
+// Measure the existing handshake; no extra messages are sent.
+start := time.Now()
+_, err := client.Handshake(ctx, conn, creds)
+tracker.RecordProbe(time.Since(start), err)
+
+// Wrap the established stream to passively account for throughput.
+stream := linkquality.WrapConn(conn, tracker)
+_ , _ = stream.Write(payload)
+
+score := tracker.Score()              // 0..100 composite
+info := tracker.ConnectionInfo()      // detailed metrics for debugging/selection
+_ = score
+_ = info
+```
+
+The tracker is designed to stay out of the way: it only observes timings and
+byte counts already flowing through the connection and holds a minimal mutex to
+avoid contention in high-throughput scenarios.
+
+To view live quality snapshots when using the bundled CLI, start `s5 dial` with
+`-linkquality` (and optionally `-linkquality-interval 2s`). The tool will print
+the composite score, success ratio, RTT/jitter and throughput estimates to
+stderr at the requested cadence without affecting traffic flow:
+
+```
+s5 dial -socks host:1080 -dest example.com:443 -linkquality -stdio
+[linkquality] score=94 | success=3/3 | uptime=100.0%
+[linkquality] latency: min/avg/max 18.3ms/21.5ms/24.2ms | jitter: 1.9ms | throughput: 820.0 KB/s (peak 1040.5)
 ```
 
 - Use `Association.RelayAddress()` if you need the relay endpoint for firewall
