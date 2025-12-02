@@ -39,6 +39,9 @@ func startUDPBackend(t *testing.T, network, addr string, response []byte) (*net.
 	t.Helper()
 
 	conn, err := net.ListenPacket(network, addr)
+	if err != nil && network == "udp6" {
+		t.Skipf("IPv6 UDP not available: %v", err)
+	}
 	require.NoError(t, err)
 
 	stopped := make(chan struct{})
@@ -153,20 +156,20 @@ func TestSOCKS5_Associate_FQDN_UsesResolvedIPForCacheKey(t *testing.T) {
 	require.NoError(t, err)
 	defer client.Close()
 
-        sendDatagram := func(port int, payload []byte) []byte {
-                dg := protocol.Datagram{DstAddr: protocol.AddrSpec{FQDN: fqdn, Port: port, AddrType: protocol.ATYPDomain}, Data: payload}
-                _, err := client.WriteTo(dg.Bytes(), &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: rep.BndAddr.Port})
-                require.NoError(t, err)
+	sendDatagram := func(port int, payload []byte) []byte {
+		dg := protocol.Datagram{DstAddr: protocol.AddrSpec{FQDN: fqdn, Port: port, AddrType: protocol.ATYPDomain}, Data: payload}
+		_, err := client.WriteTo(dg.Bytes(), &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: rep.BndAddr.Port})
+		require.NoError(t, err)
 
-                buf := make([]byte, 2048)
-                _ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
-                n, _, err := client.ReadFrom(buf)
-                require.NoError(t, err)
-                _ = client.SetReadDeadline(time.Time{})
-                parsed, err := protocol.ParseDatagram(buf[:n])
-                require.NoError(t, err)
-                return parsed.Data
-        }
+		buf := make([]byte, 2048)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		n, _, err := client.ReadFrom(buf)
+		require.NoError(t, err)
+		_ = client.SetReadDeadline(time.Time{})
+		parsed, err := protocol.ParseDatagram(buf[:n])
+		require.NoError(t, err)
+		return parsed.Data
+	}
 
 	// First datagram resolves to IPv4 backend.
 	require.Equal(t, []byte("v4"), sendDatagram(v4Addr.Port, []byte("ping4")))
