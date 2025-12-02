@@ -28,13 +28,15 @@ func NewDatagram(destAddr string, data []byte) (Datagram, error) {
 	return Datagram{RSV: 0, Frag: 0, DstAddr: dstAddr, Data: data}, nil
 }
 
-func ParseDatagram(b []byte) (Datagram, error) {
-        if len(b) < 4 {
-                return Datagram{}, errors.New(errDatagramTooShortMsg)
-        }
+const datagramHeaderLen = 4
 
-        da := Datagram{RSV: 0, Frag: b[2], DstAddr: AddrSpec{AddrType: b[3]}}
-        headLen := 4
+func ParseDatagram(b []byte) (Datagram, error) {
+	if len(b) < datagramHeaderLen {
+		return Datagram{}, errors.New(errDatagramTooShortMsg)
+	}
+
+	da := Datagram{RSV: 0, Frag: b[2], DstAddr: AddrSpec{AddrType: b[3]}}
+	headLen := datagramHeaderLen
 
 	switch da.DstAddr.AddrType {
 	case ATYPIPv4:
@@ -52,6 +54,9 @@ func ParseDatagram(b []byte) (Datagram, error) {
 		da.DstAddr.Port = int(binary.BigEndian.Uint16(b[20:22]))
 		headLen += net.IPv6len + 2
 	case ATYPDomain:
+		if len(b) < headLen+1 {
+			return Datagram{}, errors.New(errDatagramTooShortMsg)
+		}
 		addrLen := int(b[4])
 		if len(b) < headLen+1+addrLen+2 {
 			return Datagram{}, errors.New(errDatagramTooShortMsg)
