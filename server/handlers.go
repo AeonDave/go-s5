@@ -73,14 +73,22 @@ func (sf *Server) handleRequest(parent context.Context, write io.Writer, req *ha
 	return h(ctx, write, req)
 }
 
+// buildHandlers precomputes the three command handler chains once at New()
+// time so the per-request path performs no closure allocation.
+func (sf *Server) buildHandlers() {
+	sf.connectHandler = sf.buildHandler(sf.handleConnect, sf.userConnectHandle, sf.userConnectMiddlewares)
+	sf.bindHandler = sf.buildHandler(sf.handleBind, sf.userBindHandle, sf.userBindMiddlewares)
+	sf.associateHandler = sf.buildHandler(sf.handleAssociate, sf.userAssociateHandle, sf.userAssociateMiddlewares)
+}
+
 func (sf *Server) getHandler(command uint8) (handler.Handler, error) {
 	switch command {
 	case protocol.CommandConnect:
-		return sf.buildHandler(sf.handleConnect, sf.userConnectHandle, sf.userConnectMiddlewares), nil
+		return sf.connectHandler, nil
 	case protocol.CommandBind:
-		return sf.buildHandler(sf.handleBind, sf.userBindHandle, sf.userBindMiddlewares), nil
+		return sf.bindHandler, nil
 	case protocol.CommandAssociate:
-		return sf.buildHandler(sf.handleAssociate, sf.userAssociateHandle, sf.userAssociateMiddlewares), nil
+		return sf.associateHandler, nil
 	default:
 		return nil, fmt.Errorf("unsupported command[%v]", command)
 	}

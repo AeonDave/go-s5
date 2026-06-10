@@ -80,6 +80,40 @@ func (sf *Datagram) Bytes() []byte {
 	return sf.buildBytes(true)
 }
 
+// WireSize returns the encoded length of the datagram (header + payload).
+func (sf *Datagram) WireSize() int {
+	length := 6 + len(sf.Data)
+	switch sf.DstAddr.AddrType {
+	case ATYPIPv4:
+		length += net.IPv4len
+	case ATYPIPv6:
+		length += net.IPv6len
+	case ATYPDomain:
+		length += 1 + len(sf.DstAddr.FQDN)
+	}
+	return length
+}
+
+// AppendBytes appends the wire encoding of the datagram (header + payload) to
+// dst and returns the extended slice, letting callers reuse staging buffers
+// instead of allocating per datagram.
+func (sf *Datagram) AppendBytes(dst []byte) []byte {
+	dst = append(dst, byte(sf.RSV>>8), byte(sf.RSV), sf.Frag, sf.DstAddr.AddrType)
+	switch sf.DstAddr.AddrType {
+	case ATYPIPv4:
+		dst = append(dst, sf.DstAddr.IP.To4()...)
+	case ATYPIPv6:
+		dst = append(dst, sf.DstAddr.IP.To16()...)
+	case ATYPDomain:
+		dst = append(dst, byte(len(sf.DstAddr.FQDN)))
+		dst = append(dst, sf.DstAddr.FQDN...)
+	default:
+		panic(fmt.Sprintf("invalid address type: %d", sf.DstAddr.AddrType))
+	}
+	dst = append(dst, byte(sf.DstAddr.Port>>8), byte(sf.DstAddr.Port))
+	return append(dst, sf.Data...)
+}
+
 func (sf *Datagram) buildBytes(includeData bool) []byte {
 	var addr []byte
 	length := 6

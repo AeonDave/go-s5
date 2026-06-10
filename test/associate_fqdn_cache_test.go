@@ -143,6 +143,77 @@ func TestSOCKS5_Associate_FQDN_Cache(t *testing.T) {
 	require.Equal(t, []byte("two"), sendDatagram(backendTwo.Port, []byte("ping-two")))
 }
 
+type countingResolver struct {
+	mu      sync.Mutex
+	records map[string]net.IP
+	calls   int
+}
+
+func (m *countingResolver) Resolve(ctx context.Context, name string) (context.Context, net.IP, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls++
+	if ip, ok := m.records[name]; ok {
+		return ctx, ip, nil
+	}
+	return ctx, nil, fmt.Errorf("not found")
+}
+
+func (m *countingResolver) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+// Repeated datagrams on the same FQDN flow must hit the resolve cache, not the
+// resolver: one lookup per flow within the TTL.
+func TestSOCKS5_Associate_FQDN_CacheFirst(t *testing.T) {
+	fqdn := "cache-first.test"
+	backend, stopBackend := startUDPBackend(t, "udp4", "127.0.0.1:0", []byte("ok"))
+	defer stopBackend()
+
+	mockDNS := &countingResolver{records: map[string]net.IP{fqdn: backend.IP}}
+	listen, stop := startSocks5(t, server.WithResolver(mockDNS))
+	defer stop()
+
+	conn, err := net.Dial("tcp", listen)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = conn.Write([]byte{protocol.VersionSocks5, 1, protocol.MethodNoAuth})
+	require.NoError(t, err)
+	out := make([]byte, 2)
+	_, err = conn.Read(out)
+	require.NoError(t, err)
+
+	req := protocol.Request{
+		Version: protocol.VersionSocks5,
+		Command: protocol.CommandAssociate,
+		DstAddr: protocol.AddrSpec{IP: net.IPv4zero, Port: 0, AddrType: protocol.ATYPIPv4},
+	}
+	_, err = conn.Write(req.Bytes())
+	require.NoError(t, err)
+	rep, err := protocol.ParseReply(conn)
+	require.NoError(t, err)
+
+	client, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+	proxyAddr := &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: rep.BndAddr.Port}
+
+	for range 3 {
+		dg := protocol.Datagram{DstAddr: protocol.AddrSpec{FQDN: fqdn, Port: backend.Port, AddrType: protocol.ATYPDomain}, Data: []byte("ping")}
+		_, err = client.WriteTo(dg.Bytes(), proxyAddr)
+		require.NoError(t, err)
+		buf := make([]byte, 2048)
+		_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, _, err = client.ReadFrom(buf)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, 1, mockDNS.count(), "datagrams within the TTL must reuse the cached resolution")
+}
+
 func TestSOCKS5_Associate_FQDN_UsesResolvedIPForCacheKey(t *testing.T) {
 	mockDNS := &mockResolverWithDelay{records: make(map[string]net.IP)}
 	fqdn := "cache-key.test"

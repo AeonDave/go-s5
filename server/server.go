@@ -75,6 +75,11 @@ type Server struct {
 	linkTracker *linkquality.Tracker
 	activeConns atomic.Int64
 
+	// Precomputed command handler chains (set once in New).
+	connectHandler   handler.Handler
+	bindHandler      handler.Handler
+	associateHandler handler.Handler
+
 	mu         sync.Mutex
 	listeners  map[net.Listener]context.CancelFunc
 	inShutdown atomic.Bool
@@ -83,6 +88,26 @@ type Server struct {
 // ErrServerClosed is returned by Serve, ServeContext, ListenAndServe and
 // ListenAndServeTLS after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("socks5: server closed")
+
+// bufioReaderPool recycles per-connection handshake readers. A reader is
+// returned to the pool only after the whole request lifecycle ends, so
+// handler.Request.Reader must not be retained past the request (same contract
+// as net/http request bodies).
+var bufioReaderPool sync.Pool
+
+func newBufioReader(r io.Reader) *bufio.Reader {
+	if v := bufioReaderPool.Get(); v != nil {
+		br := v.(*bufio.Reader)
+		br.Reset(r)
+		return br
+	}
+	return bufio.NewReader(r)
+}
+
+func putBufioReader(br *bufio.Reader) {
+	br.Reset(nil)
+	bufioReaderPool.Put(br)
+}
 
 func New(opts ...Option) *Server {
 	srv := &Server{
@@ -104,6 +129,8 @@ func New(opts ...Option) *Server {
 			srv.authMethods = []auth.Authenticator{&auth.NoAuthAuthenticator{}}
 		}
 	}
+
+	srv.buildHandlers()
 
 	return srv
 }
@@ -328,7 +355,8 @@ func (sf *Server) ServeConnContext(ctx context.Context, conn net.Conn) error {
 		return err
 	}
 
-	bufConn := bufio.NewReader(conn)
+	bufConn := newBufioReader(conn)
+	defer putBufioReader(bufConn)
 	mr, err := protocol.ParseMethodRequest(bufConn)
 	if err != nil || mr.Ver != protocol.VersionSocks5 {
 		return protocol.ErrNotSupportVersion

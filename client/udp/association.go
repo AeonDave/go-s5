@@ -185,7 +185,9 @@ func (a *Association) WriteTo(dst protocol.AddrSpec, payload []byte) (int, error
 		return 0, errors.New("invalid UDP association")
 	}
 	dg := protocol.Datagram{RSV: 0, Frag: 0, DstAddr: dst, Data: payload}
-	return a.Conn.WriteToUDP(dg.Bytes(), a.RelayAddr)
+	scratch := a.borrowScratch(dg.WireSize())
+	defer a.releaseScratch(scratch)
+	return a.Conn.WriteToUDP(dg.AppendBytes(scratch[:0]), a.RelayAddr)
 }
 
 // WriteToAddr is a convenience wrapper around WriteTo that accepts a

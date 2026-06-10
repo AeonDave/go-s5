@@ -17,8 +17,62 @@ A minimal, fast, and extensible SOCKS5 library written in Go.
 - Flexible dialing: `WithDial`, `WithDialAndRequest`, `WithDialer`
 - First-class client with multi-hop chaining (`DialChain`) over a single stream
 - Graceful shutdown: `Shutdown(ctx)` drains connections; `Close()` tears down immediately
-- UDP ASSOCIATE: peer limits, idle GC, FQDN handling
+- UDP ASSOCIATE: batched syscalls on Linux (`recvmmsg`/`sendmmsg`), per-flow DNS caching, peer limits, idle GC
 - Link quality monitoring via `linkquality.Tracker` with passive throughput and RTT tracking
+
+## Performance
+
+Measured on loopback with the benchmarks in `test/bench_test.go`
+(`go test -bench . -benchmem -run xxx ./test/`), Go 1.25, 16 hardware threads.
+
+| Metric | Linux | Windows |
+|---|---|---|
+| TCP relay throughput, single stream | ~3.8 GB/s | ~1.5 GB/s |
+| TCP relay throughput, 16 concurrent streams | ~11.4 GB/s | ~9.4 GB/s |
+| Relay-path allocations | 0 /op | 0 /op |
+| UDP proxied round trip (256 B payload) | ~28 µs | ~40 µs |
+| UDP sustained relay (200 B datagram flood) | ~200–260k pps | ~75–110k pps |
+
+How it gets there:
+
+- **TCP**: the relay preserves Go's `io.Copy` fast paths in both directions, so
+  on Linux data moves kernel-side via `splice(2)` and never enters user space.
+  The relay adds single-digit % overhead over the theoretical loopback floor.
+- **UDP**: on Linux up to 8 datagrams move per syscall (`recvmmsg`/`sendmmsg`);
+  the posted buffer set starts at 2 and doubles only under sustained bursts, so
+  sparse flows stay at the memory footprint of unbatched code. The per-flow
+  SOCKS header is pre-written into each buffer and payloads land directly
+  after it — zero per-packet copies on the return path.
+- **Hot paths allocate nothing**: flow keys are `netip.AddrPort` structs (no
+  per-packet strings), peer-limit checks are O(1) against an atomic counter,
+  source validation is precomputed per association, FQDN destinations resolve
+  once per flow within a 30 s TTL (stale entries serve as fallback during DNS
+  blips), and buffers come from a shared `sync.Pool`.
+- **Per connection**: handshake readers are pooled, command handler chains are
+  prebuilt at `New()`, and an idle UDP association pins ~64 KiB.
+
+### Behavior under congestion
+
+The server is designed to degrade predictably — shedding load instead of
+growing memory:
+
+- **TCP backpressure is end-to-end.** The relay never queues internally: a slow
+  receiver propagates flow control back to the sender through the tunnel, and
+  per-tunnel memory stays constant regardless of how far ahead the fast side
+  gets.
+- **UDP sheds at the kernel boundary.** There is no userspace packet queue; if
+  a flood exceeds relay capacity, excess datagrams drop in the socket buffer
+  and memory does not grow. In the flood benchmark above the relay sustains
+  84–97% delivery on Linux at peak ingest rates.
+- **Hostile traffic is bounded.** `WithHandshakeTimeout` kills stalled
+  handshakes, `WithUDPAssociateLimits` caps peers per association with an O(1)
+  check and reaps idle flows, fragmented datagrams are dropped, and datagram
+  sources are validated against the expected client address.
+- **The accept loop survives resource exhaustion.** Temporary accept errors
+  (e.g. out of file descriptors) trigger exponential backoff from 5 ms up to
+  1 s instead of busy-looping or exiting.
+- **DNS instability does not kill flows.** Per-flow resolutions are cached
+  with a 30 s TTL and stale entries keep serving while the resolver is failing.
 
 ## Install
 
