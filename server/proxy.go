@@ -70,10 +70,18 @@ func (sf *Server) borrowBuf() ([]byte, func()) {
 // It prefers optimized io.Copy paths (ReaderFrom/WriterTo) and uses the
 // shared buffer pool for the generic copy case to avoid per-call allocations.
 func (sf *Server) Proxy(dst io.Writer, src io.Reader) error {
+	_, err := sf.proxyCount(dst, src)
+	return err
+}
+
+// proxyCount is Proxy returning the number of payload bytes moved, so callers
+// can report relay volume without wrapping conns (which would defeat the
+// splice/sendfile fast paths).
+func (sf *Server) proxyCount(dst io.Writer, src io.Reader) (int64, error) {
 	rf, hasRF := dst.(io.ReaderFrom)
 	wt, hasWT := src.(io.WriterTo)
 
-	finish := func(err error) error {
+	finish := func(n int64, err error) (int64, error) {
 		if cw, ok := dst.(closeWriter); ok {
 			if cErr := cw.CloseWrite(); cErr != nil && !isBenignNetClose(cErr) {
 				sf.logger.Errorf("close write failed, %v", cErr)
@@ -82,7 +90,7 @@ func (sf *Server) Proxy(dst io.Writer, src io.Reader) error {
 		if cr, ok := src.(closeReader); ok {
 			_ = cr.CloseRead()
 		}
-		return err
+		return n, err
 	}
 
 	switch {
@@ -90,34 +98,40 @@ func (sf *Server) Proxy(dst io.Writer, src io.Reader) error {
 		// Prefer WriteTo in general to avoid problematic Readers that never EOF,
 		// but use ReadFrom for *bytes.Reader to satisfy expected fast-path.
 		if isSafeReadFrom(src) {
-			_, err := rf.ReadFrom(src)
-			return finish(err)
+			return finish(rf.ReadFrom(src))
 		}
-		_, err := wt.WriteTo(dst)
-		return finish(err)
+		return finish(wt.WriteTo(dst))
 	case hasRF:
-		_, err := rf.ReadFrom(src)
-		return finish(err)
+		return finish(rf.ReadFrom(src))
 	case hasWT:
-		_, err := wt.WriteTo(dst)
-		return finish(err)
+		return finish(wt.WriteTo(dst))
 	default:
 		buf, put := sf.borrowBuf()
 		defer put()
-		_, err := io.CopyBuffer(dst, src, buf[:cap(buf)])
-		return finish(err)
+		n, err := io.CopyBuffer(dst, src, buf[:cap(buf)])
+		return finish(n, err)
 	}
 }
 
 // proxyDuplex proxies bidirectionally between (aSrc->aDst) and (bSrc->bDst),
-// returning the first non-nil error.
+// returning the first non-nil error. When metrics are enabled the summed
+// byte count of both directions is reported once per tunnel.
 func (sf *Server) proxyDuplex(aDst io.Writer, aSrc io.Reader, bDst io.Writer, bSrc io.Reader) error {
-	errCh := make(chan error, 2)
-	sf.goFunc(func() { errCh <- sf.Proxy(aDst, aSrc) })
-	sf.goFunc(func() { errCh <- sf.Proxy(bDst, bSrc) })
-	err1 := <-errCh
-	err2 := <-errCh
+	type result struct {
+		n   int64
+		err error
+	}
+	resCh := make(chan result, 2)
+	sf.goFunc(func() { n, err := sf.proxyCount(aDst, aSrc); resCh <- result{n, err} })
+	sf.goFunc(func() { n, err := sf.proxyCount(bDst, bSrc); resCh <- result{n, err} })
+	res1 := <-resCh
+	res2 := <-resCh
 
+	if sf.metrics != nil {
+		sf.metrics.RelayBytes(res1.n + res2.n)
+	}
+
+	err1, err2 := res1.err, res2.err
 	if err1 != nil && !isEOFOrClosed(err1) {
 		return err1
 	}
@@ -131,6 +145,9 @@ func (sf *Server) proxyDuplex(aDst io.Writer, aSrc io.Reader, bDst io.Writer, bS
 	return err2
 }
 
+// SendReply writes a SOCKS5 reply with the given response code to the client.
+// For RepSuccess the bind address is encoded into BND.ADDR/BND.PORT; for
+// error replies bindAddr is ignored and the zero IPv4 address is sent.
 func SendReply(w io.Writer, rep uint8, bindAddr net.Addr) error {
 	rsp := protocol.Reply{
 		Version:  protocol.VersionSocks5,

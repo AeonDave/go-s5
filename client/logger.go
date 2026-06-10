@@ -9,6 +9,7 @@ import (
 // LogLevel mirrors the logging level used by the client helpers.
 type LogLevel = logging.Level
 
+// Log levels accepted by NewLogger and NewStdLogger, from silent to verbose.
 const (
 	LogLevelOff   = logging.LevelOff
 	LogLevelError = logging.LevelError

@@ -1,3 +1,8 @@
+// Package server implements a production-grade SOCKS5 server (RFC 1928) with
+// CONNECT, BIND and UDP ASSOCIATE, pluggable authentication, rules,
+// resolvers, middleware, metrics, admission control and graceful shutdown.
+// On Linux the TCP relay uses splice(2) via io.Copy fast paths and the UDP
+// relay moves batches of datagrams per syscall (recvmmsg/sendmmsg).
 package server
 
 import (
@@ -28,18 +33,30 @@ import (
 	"github.com/AeonDave/go-s5/rules"
 )
 
+// GPool is a goroutine pool abstraction (e.g. ants). When installed with
+// WithGPool, request handling is submitted to the pool instead of spawning a
+// goroutine per task; a Submit error falls back to `go`.
 type GPool interface {
 	Submit(f func()) error
 }
 
+// ConnState describes a connection lifecycle phase reported to the
+// WithConnState hook.
 type ConnState int
 
+// Connection lifecycle states, in order of occurrence.
 const (
+	// StateNew is reported right after the accept loop admits a connection.
 	StateNew ConnState = iota
+	// StateActive is reported when the SOCKS handshake begins.
 	StateActive
+	// StateClosed is reported after the connection finishes.
 	StateClosed
 )
 
+// Server is a SOCKS5 server (RFC 1928) supporting CONNECT, BIND and UDP
+// ASSOCIATE. Construct it with New and the With* options; the zero value is
+// not usable. All exported methods are safe for concurrent use.
 type Server struct {
 	authMethods                   []auth.Authenticator
 	credentials                   auth.CredentialStore
@@ -72,8 +89,12 @@ type Server struct {
 	connStateHook                 func(net.Conn, ConnState)
 	connMetadata                  func(net.Conn) map[string]string
 
-	linkTracker *linkquality.Tracker
-	activeConns atomic.Int64
+	linkTracker    *linkquality.Tracker
+	activeConns    atomic.Int64
+	maxConnections int
+	rateLimiter    *ipRateLimiter
+	metrics        Metrics
+	dialFQDN       bool
 
 	// Precomputed command handler chains (set once in New).
 	connectHandler   handler.Handler
@@ -109,6 +130,8 @@ func putBufioReader(br *bufio.Reader) {
 	bufioReaderPool.Put(br)
 }
 
+// New builds a Server with the given options. Without WithCredential or
+// WithAuthMethods the server accepts unauthenticated clients (NoAuth).
 func New(opts ...Option) *Server {
 	srv := &Server{
 		authMethods: []auth.Authenticator{},
@@ -135,6 +158,8 @@ func New(opts ...Option) *Server {
 	return srv
 }
 
+// ListenAndServe listens on the network address and serves SOCKS5 until the
+// server is shut down. It returns ErrServerClosed after Shutdown or Close.
 func (sf *Server) ListenAndServe(network, addr string) error {
 	l, err := net.Listen(network, addr)
 	if err != nil {
@@ -143,6 +168,9 @@ func (sf *Server) ListenAndServe(network, addr string) error {
 	return sf.ServeContext(context.Background(), l)
 }
 
+// ListenAndServeTLS is ListenAndServe over a TLS listener. With
+// tls.RequireAndVerifyClientCert the client certificate details are exposed
+// to rules and handlers via the auth context (tls.* payload keys).
 func (sf *Server) ListenAndServeTLS(network, addr string, c *tls.Config) error {
 	l, err := tls.Listen(network, addr, c)
 	if err != nil {
@@ -151,6 +179,8 @@ func (sf *Server) ListenAndServeTLS(network, addr string, c *tls.Config) error {
 	return sf.ServeContext(context.Background(), l)
 }
 
+// Serve accepts and serves SOCKS5 connections on l until the server is shut
+// down. It returns ErrServerClosed after Shutdown or Close.
 func (sf *Server) Serve(l net.Listener) error {
 	return sf.ServeContext(context.Background(), l)
 }
@@ -211,6 +241,9 @@ func (sf *Server) ServeContext(ctx context.Context, l net.Listener) error {
 			continue
 		}
 		tempDelay = 0
+		if !sf.admitConn(conn) {
+			continue
+		}
 		sf.onAcceptedConn(connCtx, conn)
 	}
 }
@@ -300,6 +333,34 @@ func (sf *Server) acceptWithBackoff(l net.Listener, tempDelay *time.Duration) (n
 	return nil, err
 }
 
+// admitConn applies pre-handshake admission control: the WithMaxConnections
+// cap and the WithConnectionRateLimit per-source limiter. Both checks are
+// O(1); rejected connections are closed without any SOCKS traffic. The active
+// connection counter is incremented synchronously by onAcceptedConn before
+// the next Accept, so the cap check is race-free.
+func (sf *Server) admitConn(conn net.Conn) bool {
+	if sf.maxConnections > 0 && sf.activeConns.Load() >= int64(sf.maxConnections) {
+		sf.rejectConn(conn, RejectMaxConnections)
+		return false
+	}
+	if sf.rateLimiter != nil && !sf.rateLimiter.allowConn(conn) {
+		sf.rejectConn(conn, RejectRateLimited)
+		return false
+	}
+	return true
+}
+
+func (sf *Server) rejectConn(conn net.Conn, reason RejectReason) {
+	remote := conn.RemoteAddr()
+	_ = conn.Close()
+	if sf.metrics != nil {
+		sf.metrics.ConnRejected(reason)
+	}
+	if sf.logConnections && sf.logger != nil {
+		sf.logger.Infof("rejected %s (%s)", remote, reason)
+	}
+}
+
 func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	if sf.tcpKeepAlivePeriod > 0 {
 		if tcp, ok := conn.(*net.TCPConn); ok {
@@ -310,6 +371,9 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	connCtx := sf.decorateConnContext(ctx, conn)
 	cancelableCtx, cancel := context.WithCancel(connCtx)
 	sf.trackConnState(conn, StateNew)
+	if sf.metrics != nil {
+		sf.metrics.ConnAccepted()
+	}
 	active := sf.activeConns.Add(1)
 	if sf.logConnections && sf.logger != nil {
 		sf.logger.Infof("accepted %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
@@ -321,6 +385,9 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 			sf.logger.Errorf("server: %v", err)
 		}
 		sf.trackConnState(conn, StateClosed)
+		if sf.metrics != nil {
+			sf.metrics.ConnClosed()
+		}
 		active := sf.activeConns.Add(-1)
 		if sf.logConnections && sf.logger != nil {
 			sf.logger.Infof("closed %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
@@ -328,6 +395,9 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	})
 }
 
+// ServeConn serves a single, already-accepted connection. Admission control
+// (WithMaxConnections, WithConnectionRateLimit) is not applied: it belongs to
+// the accept loop, and direct callers manage their own.
 func (sf *Server) ServeConn(conn net.Conn) error {
 	return sf.ServeConnContext(context.Background(), conn)
 }

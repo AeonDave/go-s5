@@ -226,6 +226,7 @@ func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, req
 			}
 			continue
 		}
+		var relayed int64
 		for i := range n {
 			pk, perr := protocol.ParseDatagram(bb.bufs[i][:sizes[i]])
 			if perr != nil {
@@ -238,7 +239,11 @@ func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, req
 			if !srcOK(addrs[i]) {
 				continue
 			}
+			relayed += int64(len(pk.Data))
 			sf.handleUDPDatagram(ctx, bindLn, conns, resolvedCache, addrs[i], pk, request)
+		}
+		if sf.metrics != nil && relayed > 0 {
+			sf.metrics.RelayBytes(relayed)
 		}
 		bb.onRead(n)
 	}
@@ -441,8 +446,13 @@ func (sf *Server) pipeUDPFromTarget(bindLn *net.UDPConn, conns *udpPeerTable, co
 		if p, ok := conns.load(connKey); ok {
 			p.lastSeen.Store(time.Now().UnixNano())
 		}
+		var relayed int64
 		for i := range n {
 			packets[i] = bb.bufs[i][:hlen+sizes[i]]
+			relayed += int64(sizes[i])
+		}
+		if sf.metrics != nil && relayed > 0 {
+			sf.metrics.RelayBytes(relayed)
 		}
 		if err := out.writeBatch(packets[:n], clientAddr); err != nil {
 			sf.logger.Errorf("write data to client %s failed, %v", clientAddr, err)

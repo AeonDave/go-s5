@@ -1,3 +1,8 @@
+// Package client implements a SOCKS5 client: method negotiation with NoAuth
+// and username/password, CONNECT, BIND and UDP ASSOCIATE, plus multi-hop
+// chaining over a single stream via DialChain. The client/tcp and client/udp
+// subpackages provide focused stream and datagram helpers and are re-exported
+// here for convenience.
 package client
 
 import (

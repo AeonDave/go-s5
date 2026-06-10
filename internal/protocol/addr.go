@@ -37,6 +37,9 @@ func ParseAddrSpec(addr string) (AddrSpec, error) {
 	if err != nil {
 		return AddrSpec{}, err
 	}
+	if portNum < 0 || portNum > 65535 {
+		return AddrSpec{}, fmt.Errorf("port number out of range: %d", portNum)
+	}
 
 	ip := net.ParseIP(host)
 	switch {

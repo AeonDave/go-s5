@@ -110,6 +110,10 @@ func ParseReply(r io.Reader) (rep Reply, err error) {
 	}
 	rep.Reserved, rep.BndAddr.AddrType = tmp[0], tmp[1]
 
+	if rep.BndAddr.AddrType != ATYPIPv4 && rep.BndAddr.AddrType != ATYPIPv6 && rep.BndAddr.AddrType != ATYPDomain {
+		return rep, ErrUnrecognizedAddrType
+	}
+
 	addrLen := map[byte]int{ATYPIPv4: net.IPv4len, ATYPIPv6: net.IPv6len}[rep.BndAddr.AddrType]
 	if rep.BndAddr.AddrType == ATYPDomain {
 		if _, err = io.ReadFull(r, tmp[:1]); err != nil {

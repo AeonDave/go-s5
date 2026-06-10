@@ -57,7 +57,7 @@ func ParseUserPassRequest(r io.Reader) (UserPassRequest, error) {
 		return UserPassRequest{}, err
 	}
 
-	if _, err := r.Read(tmp[:1]); err != nil {
+	if _, err := io.ReadFull(r, tmp[:1]); err != nil {
 		return UserPassRequest{}, err
 	}
 	pLen := tmp[0]

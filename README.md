@@ -14,11 +14,13 @@ A minimal, fast, and extensible SOCKS5 library written in Go.
 - Rules/ACL: `rules.RuleSet` interface (default `PermitAll`)
 - Custom DNS resolver (`resolver.NameResolver`) and address rewriter (`handler.AddressRewriter`)
 - Per-command middleware and optional full command-handler replacement
-- Flexible dialing: `WithDial`, `WithDialAndRequest`, `WithDialer`
+- Flexible dialing: `WithDial`, `WithDialAndRequest`, `WithDialer`, `WithDialFQDN` (Happy Eyeballs)
 - First-class client with multi-hop chaining (`DialChain`) over a single stream
 - Graceful shutdown: `Shutdown(ctx)` drains connections; `Close()` tears down immediately
 - UDP ASSOCIATE: batched syscalls on Linux (`recvmmsg`/`sendmmsg`), per-flow DNS caching, peer limits, idle GC
-- Link quality monitoring via `linkquality.Tracker` with passive throughput and RTT tracking
+- Admission control: `WithMaxConnections` cap and `WithConnectionRateLimit` per-source token bucket
+- Observability: `WithMetrics` hook (connections, requests, relayed bytes), `log/slog` adapter, link quality monitoring via `linkquality.Tracker`
+- Fuzz-tested wire parsers with committed regression corpus; race-clean test suite
 
 ## Performance
 
@@ -64,15 +66,55 @@ growing memory:
   a flood exceeds relay capacity, excess datagrams drop in the socket buffer
   and memory does not grow. In the flood benchmark above the relay sustains
   84–97% delivery on Linux at peak ingest rates.
-- **Hostile traffic is bounded.** `WithHandshakeTimeout` kills stalled
-  handshakes, `WithUDPAssociateLimits` caps peers per association with an O(1)
-  check and reaps idle flows, fragmented datagrams are dropped, and datagram
-  sources are validated against the expected client address.
+- **Hostile traffic is bounded.** `WithMaxConnections` rejects connections
+  beyond the cap with an O(1) check before any SOCKS traffic, and
+  `WithConnectionRateLimit` throttles per-source handshake floods with token
+  buckets whose table is swept under spoofed-source pressure, so its memory
+  stays bounded too. `WithHandshakeTimeout` kills stalled handshakes,
+  `WithUDPAssociateLimits` caps peers per association with an O(1) check and
+  reaps idle flows, fragmented datagrams are dropped, and datagram sources
+  are validated against the expected client address.
 - **The accept loop survives resource exhaustion.** Temporary accept errors
   (e.g. out of file descriptors) trigger exponential backoff from 5 ms up to
   1 s instead of busy-looping or exiting.
 - **DNS instability does not kill flows.** Per-flow resolutions are cached
   with a 30 s TTL and stale entries keep serving while the resolver is failing.
+
+## Comparison
+
+How go-s5 compares with the Go SOCKS5 libraries it is most often weighed
+against (based on upstream repositories as of June 2026):
+
+| | **go-s5** | [things-go/go-socks5] | [armon/go-socks5] | [txthinking/socks5] | [x/net/proxy] |
+|---|---|---|---|---|---|
+| Server | ✅ | ✅ | ✅ | ✅ | — |
+| Client | ✅ | — | — | ✅ | ✅ |
+| CONNECT | ✅ | ✅ | ✅ | ✅ | ✅ |
+| BIND | ✅ | — | — | — | — |
+| UDP ASSOCIATE | ✅ | ✅ | — | ✅ | — |
+| Username/Password auth | ✅ | ✅ | ✅ | ✅ | ✅ |
+| mTLS client identity → rules | ✅ | — | — | — | — |
+| Multi-hop chaining (one stream) | ✅ | — | — | — | ✅¹ |
+| Batched UDP syscalls (`recvmmsg`/`sendmmsg`) | ✅ | — | — | — | — |
+| Zero-alloc relay hot paths | ✅ | — | — | — | n/a |
+| `splice(2)` TCP fast path (Linux) | ✅ | ✅² | ✅² | — | n/a |
+| Connection cap / per-IP rate limiting | ✅ | — | — | ✅³ | — |
+| Metrics hook | ✅ | — | — | — | — |
+| Graceful shutdown (`Shutdown(ctx)`) | ✅ | — | — | — | n/a |
+| Per-command middleware | ✅ | ✅ | — | — | — |
+| Link quality scoring | ✅ | — | — | — | — |
+| Fuzz-tested protocol parsers | ✅ | — | — | — | — |
+| Committed reproducible benchmarks | ✅ | — | — | — | — |
+| Actively maintained | ✅ | ✅ | — (archived-style, last commits ~2016) | ✅ | ✅ |
+
+¹ via repeated `proxy.SOCKS5` dialer wrapping (one TCP hop per dialer, client only).
+² inherited implicitly when `io.Copy` sees raw `*net.TCPConn`s; not preserved through wrappers.
+³ txthinking/socks5 exposes a global TCP timeout/limit, not per-source token buckets.
+
+[things-go/go-socks5]: https://github.com/things-go/go-socks5
+[armon/go-socks5]: https://github.com/armon/go-socks5
+[txthinking/socks5]: https://github.com/txthinking/socks5
+[x/net/proxy]: https://pkg.go.dev/golang.org/x/net/proxy
 
 ## Install
 
@@ -144,6 +186,9 @@ if err := srv.Shutdown(ctx); err != nil {
 | **Dialing** | `WithDial(func(ctx, network, addr) (net.Conn, error))` | Custom dial function |
 | | `WithDialAndRequest(func(ctx, network, addr, *handler.Request) (net.Conn, error))` | Dial with full request context |
 | | `WithDialer(net.Dialer)` | Custom `net.Dialer` for outbound connections |
+| | `WithDialFQDN(bool)` | CONNECT dials hostnames directly (Happy Eyeballs, RFC 8305) instead of pre-resolving |
+| **Admission control** | `WithMaxConnections(int)` | Cap concurrent connections; excess closed before handshake (O(1)) |
+| | `WithConnectionRateLimit(perSecond float64, burst int)` | Per-source-IP token bucket; excess closed before handshake |
 | **TCP / BIND / UDP** | `WithHandshakeTimeout(time.Duration)` | Deadline for negotiation + request parsing |
 | | `WithTCPKeepAlive(time.Duration)` | TCP keepalive period on accepted connections |
 | | `WithBindIP(net.IP)` | Bind IP for BIND and UDP sockets |
@@ -156,9 +201,10 @@ if err := srv.Shutdown(ctx); err != nil {
 | | `WithConnState(func(net.Conn, server.ConnState))` | Observe StateNew / StateActive / StateClosed |
 | | `WithConnMetadata(func(net.Conn) map[string]string)` | Attach static metadata to `handler.Request.Metadata` |
 | **Infra** | `WithGPool(GPool)` | Goroutine pool for request handling |
-| | `WithLogger(Logger)` | Replace the server logger |
+| | `WithLogger(Logger)` | Replace the server logger (`NewSlogLogger` adapts `log/slog`) |
 | | `WithBufferPool(buffer.BufPool)` | Replace the proxy I/O buffer pool |
 | | `WithConnectionLogging(bool)` | Log accept/close events with peer addresses |
+| | `WithMetrics(server.Metrics)` | Receive connection/request/relay-bytes events |
 | | `WithLinkQuality(*linkquality.Tracker)` | Attach a tracker for outbound hop quality |
 
 ## Authentication
@@ -315,6 +361,32 @@ On the server side, pass `server.WithLinkQuality(tracker)` and read
 `-linkquality` / `-linkquality-interval` emit periodic snapshots to stderr for
 both `s5 server` and `s5 dial`.
 
+## Observability
+
+`WithMetrics` installs a hook that receives connection, request and relay
+events. `server.CounterMetrics` is a ready-made atomic implementation; any
+backend (Prometheus, OpenTelemetry, expvar) can implement the same interface.
+When no hook is installed the only cost on the serving path is a nil check —
+byte counts are taken from the relay's own return values, so the `splice(2)`
+and batched-UDP fast paths are untouched.
+
+```go
+metrics := &server.CounterMetrics{}
+s := socks5.New(
+    socks5.WithMetrics(metrics),
+    socks5.WithMaxConnections(4096),
+    socks5.WithConnectionRateLimit(10, 20), // per source IP: 20 burst, 10/s sustained
+    socks5.WithLogger(socks5.NewSlogLogger(slog.Default())),
+)
+// ... later
+snap := metrics.Snapshot()
+log.Printf("active=%d relayed=%dB rejected=%d",
+    snap.Accepted-snap.Closed, snap.RelayedBytes, snap.Rejected)
+```
+
+Rejections (connection cap, rate limit) happen before any SOCKS byte is
+exchanged and are reported with their reason.
+
 ## Middleware
 
 `handler.Middleware` is `func(ctx context.Context, w io.Writer, req *handler.Request) error`.
@@ -351,3 +423,14 @@ go test ./...
 ```
 
 The test suite is race-clean (`-race`) and runs on every push via CI.
+
+Every wire-format parser (`ParseRequest`, `ParseReply`, `ParseMethodRequest`,
+`ParseUserPassRequest`, `ParseDatagram`, `ParseAddrSpec`) has a native Go
+fuzz target asserting no-panic and encode/decode round-trip stability:
+
+```
+go test -fuzz=FuzzParseDatagram -fuzztime=30s ./internal/protocol/
+```
+
+The seed corpus is replayed on every plain `go test` run, so past fuzz
+findings act as permanent regression tests.

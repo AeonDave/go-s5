@@ -13,9 +13,7 @@ linters:
     revive:
       rules:
         - name: exported
-          disabled: true
         - name: package-comments
-          disabled: true
   exclusions:
     rules:
       - path: "_test\\.go"
@@ -23,6 +21,12 @@ linters:
           - gocritic
           - prealloc
           - errcheck
+      # Internal packages are not part of the public API surface; doc comments
+      # there are encouraged but not enforced.
+      - path: "^internal/|/internal/|^cmd/"
+        linters:
+          - revive
+        text: "exported|package-comments"
       - linters:
           - staticcheck
         text: "SA6002"

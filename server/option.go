@@ -14,6 +14,7 @@ import (
 	"github.com/AeonDave/go-s5/rules"
 )
 
+// Option configures a Server at construction time; pass options to New.
 type Option func(s *Server)
 
 // WithBufferPool sets the buffer pool used by the proxy I/O fast-paths.
@@ -177,4 +178,45 @@ func WithConnectionLogging(enabled bool) Option {
 // WithLinkQuality enables link quality tracking for outbound hops.
 func WithLinkQuality(tr *linkquality.Tracker) Option {
 	return func(s *Server) { s.linkTracker = tr }
+}
+
+// WithMaxConnections caps the number of concurrently served connections.
+// When the cap is reached the accept loop closes new connections immediately,
+// before any SOCKS traffic, with an O(1) check. n <= 0 means unlimited.
+func WithMaxConnections(n int) Option {
+	return func(s *Server) { s.maxConnections = n }
+}
+
+// WithConnectionRateLimit limits accepted connections per source IP using a
+// token bucket: each source may open bursts of up to burst connections and
+// sustain perSecond connections per second afterwards. Excess connections are
+// closed before the handshake. perSecond <= 0 disables the limiter; burst < 1
+// is raised to 1. Memory is bounded under spoofed-source floods: idle buckets
+// are swept once the table grows past an internal threshold.
+func WithConnectionRateLimit(perSecond float64, burst int) Option {
+	return func(s *Server) {
+		if perSecond <= 0 {
+			s.rateLimiter = nil
+			return
+		}
+		s.rateLimiter = newIPRateLimiter(perSecond, burst)
+	}
+}
+
+// WithMetrics installs a Metrics implementation that receives connection,
+// request and relay events. Pass nil to disable (the default); when disabled
+// the only cost on the serving path is a nil check.
+func WithMetrics(m Metrics) Option {
+	return func(s *Server) { s.metrics = m }
+}
+
+// WithDialFQDN controls how CONNECT requests carrying a domain name are
+// dialed. When enabled the server skips its own resolution step and hands the
+// hostname straight to the dialer, restoring the net.Dialer dual-stack
+// "Happy Eyeballs" fallback (RFC 8305) and per-attempt address selection.
+// The configured resolver is then bypassed for CONNECT, and rules, rewriters
+// and middleware observe a request whose DestAddr still carries the FQDN with
+// a nil IP. BIND and UDP ASSOCIATE are unaffected.
+func WithDialFQDN(enabled bool) Option {
+	return func(s *Server) { s.dialFQDN = enabled }
 }

@@ -11,6 +11,16 @@ import (
 )
 
 func (sf *Server) handleRequest(parent context.Context, write io.Writer, req *handler.Request) error {
+	if sf.metrics == nil {
+		return sf.dispatchRequest(parent, write, req)
+	}
+	sf.metrics.Request(req.Command)
+	err := sf.dispatchRequest(parent, write, req)
+	sf.metrics.RequestDone(req.Command, err)
+	return err
+}
+
+func (sf *Server) dispatchRequest(parent context.Context, write io.Writer, req *handler.Request) error {
 	var err error
 	ctx := parent
 	if req.Context != nil {
@@ -29,7 +39,11 @@ func (sf *Server) handleRequest(parent context.Context, write io.Writer, req *ha
 
 	// Work on a copy to avoid mutating RawDestAddr
 	destCopy := *req.RawDestAddr
-	if destCopy.FQDN != "" {
+	// With WithDialFQDN, CONNECT destinations keep their hostname and the
+	// dialer resolves it (preserving Happy Eyeballs); everything else still
+	// resolves here because BIND/ASSOCIATE need a concrete IP.
+	skipResolve := sf.dialFQDN && req.Command == protocol.CommandConnect
+	if destCopy.FQDN != "" && !skipResolve {
 		var ip net.IP
 		var resolveCtx context.Context
 		resolveCtx, ip, err = sf.resolver.Resolve(ctx, destCopy.FQDN)

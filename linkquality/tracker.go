@@ -1,3 +1,7 @@
+// Package linkquality passively measures the health of network links — RTT,
+// jitter, throughput and uptime — without sending probes or altering socket
+// options, and condenses them into a composite 0–100 score. Wrap connections
+// with WrapConn and record handshake latencies with Tracker.RecordProbe.
 package linkquality
 
 import (
@@ -12,6 +16,7 @@ import (
 // EndpointKind describes what is being measured.
 type EndpointKind string
 
+// Endpoint kinds reported in Metadata.
 const (
 	EndpointUnknown EndpointKind = "unknown"
 	EndpointSOCKS5  EndpointKind = "socks5"
@@ -329,18 +334,10 @@ func (t *Tracker) computeUptime(now time.Time) (uptime, downtime time.Duration, 
 	if elapsed <= 0 {
 		return 0, downtime, 1
 	}
-	if downtime > elapsed {
-		downtime = elapsed
-	}
-	uptime = elapsed - downtime
-	if uptime < 0 {
-		uptime = 0
-	}
+	downtime = min(downtime, elapsed)
+	uptime = max(elapsed-downtime, 0)
 	if uptime == 0 && t.stateUp {
-		uptime = time.Nanosecond
-		if uptime > elapsed {
-			uptime = elapsed
-		}
+		uptime = min(time.Nanosecond, elapsed)
 		downtime = elapsed - uptime
 	}
 	ratio = float64(uptime) / float64(elapsed)
