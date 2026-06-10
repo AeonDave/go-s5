@@ -3,8 +3,8 @@ package server
 import "log"
 
 type Logger interface {
-	Infof(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Infof(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 type Std struct {
@@ -15,10 +15,10 @@ func NewLogger(l *log.Logger) *Std {
 	return &Std{Logger: l}
 }
 
-func (sf Std) Infof(format string, args ...interface{}) {
+func (sf Std) Infof(format string, args ...any) {
 	sf.Printf("[I]: "+format, args...)
 }
 
-func (sf Std) Errorf(format string, args ...interface{}) {
+func (sf Std) Errorf(format string, args ...any) {
 	sf.Printf("[E]: "+format, args...)
 }

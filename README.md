@@ -1,515 +1,275 @@
 # go-s5
 
-A minimal, fast, and extensible SOCKS5 lib written in Go.
-It implements the three primary commands from RFC 1928: CONNECT, BIND, and UDP ASSOCIATE. The library exposes clear extension points for authentication, authorization, DNS resolution, address rewriting, and per‑command middleware. It also includes pragmatic I/O optimizations for high throughput.
+A minimal, fast, and extensible SOCKS5 library written in Go.
 
-[![CodeQL Advanced](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml/badge.svg)](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml)
+[![CI](https://github.com/AeonDave/go-s5/actions/workflows/go.yml/badge.svg)](https://github.com/AeonDave/go-s5/actions/workflows/go.yml)
+[![CodeQL](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml/badge.svg)](https://github.com/AeonDave/go-s5/actions/workflows/codeql.yml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/AeonDave/go-s5)](https://goreportcard.com/report/github.com/AeonDave/go-s5)
-![GitHub Issues or Pull Requests](https://img.shields.io/github/issues/AeonDave/go-s5)
-![GitHub last commit](https://img.shields.io/github/last-commit/AeonDave/go-s5)
 ![GitHub License](https://img.shields.io/github/license/AeonDave/go-s5)
 
-Contents
-- Overview
-- Features
-- Install
-- Quick Start
-- CLI (s5)
-- Authentication (NoAuth, User/Pass, mTLS)
-- Options (With... API)
-- Client API (CONNECT/BIND/UDP, Multi-hop)
-- Client helper packages (TCP/UDP utilities)
-- Link quality monitoring
-- Examples
-  - Basic server
-  - Username/password
-  - TLS and mTLS
-  - Custom rules
-  - Custom resolver
-  - Address rewriter
-  - Middleware
-  - Upstream chaining
-  - Client: multi-hop DialChain
-  - Advanced BIND
-  - Advanced UDP ASSOCIATE
-- Performance Notes
-- Compatibility
-- Testing
+## Features
 
-Overview
-This repository provides a reusable library to build SOCKS5 servers. It performs method negotiation, request parsing, and replies (REP with BND.ADDR/BND.PORT), then proxies data between the client and the target.
+- Full RFC 1928: CONNECT, BIND, and UDP ASSOCIATE
+- Pluggable authentication: NoAuth and Username/Password; mTLS via TLS listener
+- Rules/ACL: `rules.RuleSet` interface (default `PermitAll`)
+- Custom DNS resolver (`resolver.NameResolver`) and address rewriter (`handler.AddressRewriter`)
+- Per-command middleware and optional full command-handler replacement
+- Flexible dialing: `WithDial`, `WithDialAndRequest`, `WithDialer`
+- First-class client with multi-hop chaining (`DialChain`) over a single stream
+- Graceful shutdown: `Shutdown(ctx)` drains connections; `Close()` tears down immediately
+- UDP ASSOCIATE: peer limits, idle GC, FQDN handling
+- Link quality monitoring via `linkquality.Tracker` with passive throughput and RTT tracking
 
-Features
-- Full SOCKS5: CONNECT, BIND, UDP ASSOCIATE
-- Pluggable authentication: NoAuth and Username/Password; transport‑level mTLS supported via TLS listener
-- Rules/ACLs: customizable authorization (default PermitAll)
-- DNS: custom resolver support
-- Address rewriting: transform destination before dialing
-- Per‑command middleware and optional custom handlers
-- Flexible dialing: WithDial, WithDialAndRequest, WithDialer
-- First-class client with multi-hop chaining over a single stream (Handshake+CONNECT per hop)
-- TCP options: handshake timeout, TCP keep‑alive
-- BIND tuning: bind IP, accept timeout, peer validation mode
-- UDP ASSOCIATE: udp4/udp6 selection, FQDN handling, peer limits with idle GC, optional bind IP
-- Server-side upstream chaining via CLI `-upstream` flag
-- I/O performance: buffer pool, fast-paths, half-close, duplex proxy
-- Logging and goroutine pool (GPool) integration
-- Graceful shutdown hooks: ServeContext, per-connection contexts/metadata, and ConnState callbacks
+## Install
 
-Install
-- Go 1.24+
-- As a library (server, client, protocol):
+Requires Go 1.25+.
+
 ```
-go get github.com/AeonDave/go-s5/server github.com/AeonDave/go-s5/client github.com/AeonDave/go-s5/protocol
-```
-Import examples:
-```
-import socks5 "github.com/AeonDave/go-s5/server"
-import client "github.com/AeonDave/go-s5/client"
-import socks5protocol "github.com/AeonDave/go-s5/protocol"
+go get github.com/AeonDave/go-s5/server \
+       github.com/AeonDave/go-s5/client \
+       github.com/AeonDave/go-s5/protocol
 ```
 
-CLI (s5)
-- Build the CLI:
-```
-go build -o s5 ./cmd/s5
-```
-- Start a server on :1080 (NoAuth by default):
-```
-./s5 server -listen :1080
-```
-- With username/password and handshake/keepalive tuning:
-```
-./s5 server -listen :1080 -user alice -pass secret -handshake-timeout 5s -tcp-keepalive 30s
-```
-- Log accepts/closes (optional):
-```
-./s5 server -listen :1080 -log-connections
-```
-- With TLS and optional mTLS:
-```
-./s5 server -listen :1080 -tls-cert cert.pem -tls-key key.pem -mtls-ca ca.pem
-```
-- Chain through an upstream SOCKS5 hop (with optional auth):
-```
-./s5 server -listen :1080 -upstream 1.2.3.4:1080
-./s5 server -listen :1080 -upstream 1.2.3.4:1080 -upstream-user alice -upstream-pass secret
-```
-- Track outbound hop quality (direct or upstream) and print periodic snapshots:
-```
-./s5 server -listen :1080 -linkquality -linkquality-interval 3s
-./s5 server -listen :1080 -upstream 1.2.3.4:1080 -linkquality -linkquality-interval 3s
-```
-- Test a CONNECT via the client helper (prints response to stdout):
-```
-./s5 dial -socks 127.0.0.1:1080 -dest example.com:80 -send $'GET / HTTP/1.0\r\n\r\n' -io-timeout 5s
-```
-- Open a stdio tunnel to a destination:
-```
-./s5 dial -socks 127.0.0.1:1080 -dest example.com:80 -stdio
-```
+## Quick start
 
-Quick Start
-Minimal server on :1080 (no authentication):
-```
+```go
 package main
 
 import (
     "log"
+    "time"
+
     socks5 "github.com/AeonDave/go-s5/server"
 )
 
 func main() {
-    s := socks5.New()
+    s := socks5.New(
+        socks5.WithHandshakeTimeout(5*time.Second),
+        socks5.WithTCPKeepAlive(30*time.Second),
+    )
     log.Fatal(s.ListenAndServe("tcp", ":1080"))
 }
 ```
 
-Need graceful shutdown? Use `ServeContext` instead of `ListenAndServe` and cancel the context when it is time to stop; every accepted connection inherits (and can derive from) that context so dialers, middleware, and custom handlers observe cancellation immediately.
+## Graceful shutdown
 
-Client API (CONNECT/BIND/UDP, Multi-hop)
-- Create a client, perform Handshake, then CONNECT/BIND/UDP as needed.
-- For multi-hop, use DialChain to build N hops over the same stream (Handshake+CONNECT per hop), then CONNECT to the final target.
+`ServeContext` binds a context to the accept loop; canceling it tears down every
+active connection immediately. For a gentler stop, use `Shutdown`:
 
-Single hop CONNECT example:
-```
-conn, _ := net.Dial("tcp", "127.0.0.1:1080")
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
-_, _ = cli.Handshake(ctx, conn, nil) // NoAuth
-dst, _ := socks5protocol.ParseAddrSpec("example.com:80")
-_, _ = cli.Connect(ctx, conn, dst)
-```
+```go
+srv := socks5.New()
+ln, _ := net.Listen("tcp", ":1080")
 
-Multi-hop DialChain (client-side chaining):
-```
-chain := []client.Hop{
-  { Address: "10.0.0.2:1080", Creds: &client.Credentials{Username:"alice", Password:"secret"} },
-  { Address: "hop3.example:1080", /* TLSConfig: myTLS */ },
+// Start serving in the background.
+go srv.ServeContext(context.Background(), ln)
+
+// ... later, stop accepting and wait for in-flight connections to finish.
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
+if err := srv.Shutdown(ctx); err != nil {
+    // ctx expired before all conns drained — force them down.
+    _ = srv.Close()
 }
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
+```
+
+- `Shutdown(ctx)` closes all listeners so no new connections are accepted, then
+  polls until active connections reach zero or `ctx` expires.
+- `Close()` closes all listeners and cancels every active connection immediately.
+- `Serve`, `ServeContext`, `ListenAndServe`, and `ListenAndServeTLS` return
+  `server.ErrServerClosed` after either call.
+
+## Server options
+
+| Category | Option | Notes |
+|---|---|---|
+| **Auth** | `WithAuthMethods([]auth.Authenticator)` | Append custom authenticators |
+| | `WithCredential(auth.CredentialStore)` | Enable User/Pass with a credential store |
+| **Rules / Resolver / Rewriter** | `WithRule(rules.RuleSet)` | ACL evaluated before dialing |
+| | `WithResolver(resolver.NameResolver)` | Custom DNS resolver |
+| | `WithRewriter(handler.AddressRewriter)` | Mutate destination before dialing |
+| **Dialing** | `WithDial(func(ctx, network, addr) (net.Conn, error))` | Custom dial function |
+| | `WithDialAndRequest(func(ctx, network, addr, *handler.Request) (net.Conn, error))` | Dial with full request context |
+| | `WithDialer(net.Dialer)` | Custom `net.Dialer` for outbound connections |
+| **TCP / BIND / UDP** | `WithHandshakeTimeout(time.Duration)` | Deadline for negotiation + request parsing |
+| | `WithTCPKeepAlive(time.Duration)` | TCP keepalive period on accepted connections |
+| | `WithBindIP(net.IP)` | Bind IP for BIND and UDP sockets |
+| | `WithBindAcceptTimeout(time.Duration)` | Max wait for peer during BIND |
+| | `WithBindPeerCheckIPOnly(bool)` | Validate BIND peer by IP only (ignore port) |
+| | `WithUseBindIpBaseResolveAsUdpAddr(bool)` | Advertise bind IP in UDP ASSOCIATE reply |
+| | `WithUDPAssociateLimits(maxPeers int, idleTimeout time.Duration)` | Peer cap and idle GC |
+| **Lifecycle hooks** | `WithBaseContext(func(net.Listener) context.Context)` | Base context factory per listener |
+| | `WithConnContext(func(context.Context, net.Conn) context.Context)` | Decorate per-connection context |
+| | `WithConnState(func(net.Conn, server.ConnState))` | Observe StateNew / StateActive / StateClosed |
+| | `WithConnMetadata(func(net.Conn) map[string]string)` | Attach static metadata to `handler.Request.Metadata` |
+| **Infra** | `WithGPool(GPool)` | Goroutine pool for request handling |
+| | `WithLogger(Logger)` | Replace the server logger |
+| | `WithBufferPool(buffer.BufPool)` | Replace the proxy I/O buffer pool |
+| | `WithConnectionLogging(bool)` | Log accept/close events with peer addresses |
+| | `WithLinkQuality(*linkquality.Tracker)` | Attach a tracker for outbound hop quality |
+
+## Authentication
+
+**NoAuth** is the default when no credentials are configured.
+
+**Username/Password** — pass a `auth.StaticCredentials` map (implements
+`auth.CredentialStore`), or supply a custom `CredentialStore` to
+`WithCredential`:
+
+```go
+creds := auth.StaticCredentials{"alice": "secret", "bob": "p@ss"}
+s := socks5.New(socks5.WithCredential(creds))
+log.Fatal(s.ListenAndServe("tcp", ":1080"))
+```
+
+**Mutual TLS** — start the server on a TLS listener and set
+`ClientAuth: tls.RequireAndVerifyClientCert`. When TLS is active, the server
+automatically populates `auth.AContext.Payload` with the following keys from
+the client leaf certificate:
+
+- `tls.subject`, `tls.issuer`
+- `tls.san.dns`, `tls.san.ip`
+- `tls.fingerprint.sha256`
+
+These keys are available to rules, middleware, and custom handlers.
+
+```go
+tlsCfg := &tls.Config{
+    Certificates: []tls.Certificate{cert},
+    ClientAuth:   tls.RequireAndVerifyClientCert,
+    ClientCAs:    caPool,
+}
+s := socks5.New(socks5.WithHandshakeTimeout(5 * time.Second))
+log.Fatal(s.ListenAndServeTLS("tcp", ":1080", tlsCfg))
+```
+
+## Client
+
+**Single-hop CONNECT:**
+
+```go
+conn, _ := net.Dial("tcp", "127.0.0.1:1080")
+cli := client.New(
+    client.WithHandshakeTimeout(5*time.Second),
+    client.WithIOTimeout(10*time.Second),
+)
+_, _ = cli.Handshake(ctx, conn, nil) // NoAuth; pass *client.Credentials for user/pass
+dst, _ := protocol.ParseAddrSpec("example.com:80")
+_, _ = cli.Connect(ctx, conn, dst)
+// conn is now tunneled to example.com:80
+```
+
+Use `cli.ConnectStream` to get a `*tcp.Stream` with helpers like `WriteString`,
+`ReadFull`, `CopyTo/CopyFrom`, and `Relay` (bidirectional proxy with context
+cancellation). Use `cli.UDPAssociate` to get a `*client.UDPAssociation` with
+`WriteTo`/`ReadFrom`/`PacketConn()`. Use `cli.Bind` (or `BindStart`/`BindWait`)
+for BIND.
+
+**Multi-hop DialChain:**
+
+```go
+chain := []client.Hop{
+    {Address: "10.0.0.2:1080", Creds: &client.Credentials{Username: "alice", Password: "secret"}},
+    {Address: "hop2.example:1080", TLSConfig: &tls.Config{ServerName: "hop2.example", MinVersion: tls.VersionTLS12}},
+}
+cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(10*time.Second))
 conn, err := cli.DialChain(ctx, chain, "example.org:443", 5*time.Second)
 if err != nil { /* handle */ }
 defer conn.Close()
-// conn now speaks to example.org:443 through 2 SOCKS hops over a single stream
+// conn speaks to example.org:443 through 2 SOCKS hops over a single stream.
 ```
 
-Notes:
-- Per-hop creds/TLS are optional via Hop.{Creds,TLSConfig}.
-- DialChain respects ctx and client timeouts; set WithHandshakeTimeout/WithIOTimeout.
-- You can also call the method form: `cli.DialChain(ctx, chain, final, 5*time.Second)`.
+Per-hop `Creds` and `TLSConfig` are optional. Pass an empty `finalTarget` to
+stop at the last hop and issue `UDPAssociate` or `Bind` directly.
+The `client/tcp` and `client/udp` packages provide focused APIs for stream and
+datagram workloads; the root `client` package re-exports them for backwards compatibility.
 
-Client helper packages (TCP/UDP utilities)
-- The root `client` package keeps backwards compatibility helpers while `client/tcp`
-  and `client/udp` provide focused APIs for stream and datagram workloads.
-- Both helpers accept standard `context.Context` deadlines and surface
-  convenience wrappers so callers do not need to hand-roll read/write loops.
+## CLI
 
-### TCP stream helper
+Build:
 
-```go
-package main
-
-import (
-    "context"
-    "fmt"
-    "net"
-    "time"
-
-    client "github.com/AeonDave/go-s5/client"
-    socks5protocol "github.com/AeonDave/go-s5/protocol"
-)
-
-func main() {
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-
-    conn, _ := net.Dial("tcp", "127.0.0.1:1080")
-    defer conn.Close()
-
-    cli := client.New()
-    _, _ = cli.Handshake(ctx, conn, nil)
-
-    dst, _ := socks5protocol.ParseAddrSpec("example.org:443")
-    stream, _, _ := cli.ConnectStream(ctx, conn, dst)
-    defer stream.Close()
-
-    // Set deadlines before exchanging data to avoid hanging sockets.
-    _ = stream.SetDeadline(time.Now().Add(5 * time.Second))
-
-    _, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
-
-    buf := make([]byte, 1024)
-    n, _ := stream.Read(buf)
-    fmt.Printf("response: %s\n", buf[:n])
-}
+```
+go build -o s5 ./cmd/s5
 ```
 
-- `client/tcp.Stream.Relay` proxies two `net.Conn` instances using your context to
-  enforce cancellation and deadline propagation.
-- Security tip: when you promote the SOCKS hop to TLS use a hardened
-  `tls.Config` with `MinVersion: tls.VersionTLS12` (or newer) and populate
-  `ServerName` so certificate verification succeeds.
+**Server examples:**
 
-### UDP association helper
+```
+# NoAuth, plain TCP
+s5 server -listen :1080
 
-```go
-package main
+# User/Pass with tuning
+s5 server -listen :1080 -user alice -pass secret -handshake-timeout 5s -tcp-keepalive 30s
 
-import (
-    "context"
-    "fmt"
-    "net"
-    "time"
+# TLS + optional mTLS
+s5 server -listen :1080 -tls-cert cert.pem -tls-key key.pem -mtls-ca ca.pem
 
-    client "github.com/AeonDave/go-s5/client"
-)
+# Chain through an upstream SOCKS5 hop
+s5 server -listen :1080 -upstream 1.2.3.4:1080 -upstream-user alice -upstream-pass secret
 
-func main() {
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-    defer cancel()
-
-    conn, _ := net.Dial("tcp", "127.0.0.1:1080")
-    defer conn.Close()
-
-    cli := client.New()
-    _, _ = cli.Handshake(ctx, conn, nil)
-
-    assoc, _, _ := cli.UDPAssociate(ctx, conn)
-    defer assoc.Close()
-
-    pc := assoc.PacketConn()
-    target, _ := client.ParseUDPAddr("198.51.100.42:12345")
-    _, _ = pc.WriteTo([]byte("payload"), target)
-
-    buf := make([]byte, 1500)
-    n, addr, _ := pc.ReadFrom(buf)
-    fmt.Printf("reply from %s: %x\n", addr.String(), buf[:n])
-}
+# Log connections and track outbound link quality
+s5 server -listen :1080 -log-connections -linkquality -linkquality-interval 3s
 ```
 
-Link quality monitoring
------------------------
-The `linkquality` package offers a lightweight, non-invasive tracker that reuses
-existing handshakes, keep-alives, and data transfers to estimate link health
-without injecting additional traffic or altering socket options. Key entry
-points:
+**Dial examples:**
 
-- `Tracker`: thread-safe accumulator exposed via `Score()` (0–100) and
-  `ConnectionInfo()` (detailed metrics: RTT/jitter, success rate, throughput,
-  uptime, metadata).
-- `RecordProbe`: call with the duration and error from an existing handshake or
-  TCP dial to register latency and success/failure without issuing new packets.
-- `WrapConn`: wraps any `net.Conn` to passively record throughput; it never
-  changes deadlines, keep-alive state, or TLS settings and simply mirrors reads
-  and writes while timing them.
-- `ProbeTCP` / `ProbeSOCKSHandshake`: optional helpers that run bounded health
-  checks when you explicitly need active measurements (e.g., periodic scoring
-  against an idle hop). Use contexts/timeouts to keep probes short-lived.
+```
+# Send an HTTP request and print response
+s5 dial -socks 127.0.0.1:1080 -dest example.com:80 -send $'GET / HTTP/1.0\r\n\r\n' -io-timeout 5s
 
-Example: track a SOCKS handshake and the resulting data stream without
-increasing traffic volume:
+# Stdio tunnel (e.g. for SSH ProxyCommand)
+s5 dial -socks 127.0.0.1:1080 -dest example.com:22 -stdio
+
+# Show live link quality during a session
+s5 dial -socks 127.0.0.1:1080 -dest example.com:443 -linkquality -stdio
+```
+
+## Link quality monitoring
+
+The `linkquality` package provides a thread-safe `Tracker` that passively
+observes existing traffic — it never sends additional probes or alters socket
+options.
 
 ```go
-import (
-    "time"
-
-    "github.com/AeonDave/go-s5/client"
-    "github.com/AeonDave/go-s5/linkquality"
-)
-
 tracker := linkquality.NewTracker(linkquality.Metadata{
     Name: "exit-eu-1",
     Kind: linkquality.EndpointSOCKS5,
     TLS:  true,
 })
 
-// Measure the existing handshake; no extra messages are sent.
+// Record an existing handshake latency — no extra packets sent.
 start := time.Now()
-_, err := client.Handshake(ctx, conn, creds)
+_, err := cli.Handshake(ctx, conn, creds)
 tracker.RecordProbe(time.Since(start), err)
 
-// Wrap the established stream to passively account for throughput.
-stream := linkquality.WrapConn(conn, tracker)
-_ , _ = stream.Write(payload)
+// Passively track throughput on the established stream.
+measured := linkquality.WrapConn(conn, tracker)
 
-score := tracker.Score()              // 0..100 composite
-info := tracker.ConnectionInfo()      // detailed metrics for debugging/selection
-_ = score
-_ = info
+score := tracker.Score()           // composite 0–100
+info := tracker.ConnectionInfo()   // RTT, jitter, throughput, uptime, etc.
 ```
 
-The tracker is designed to stay out of the way: it only observes timings and
-byte counts already flowing through the connection and holds a minimal mutex to
-avoid contention in high-throughput scenarios.
+Key entry points:
+- `NewTracker(Metadata)` — creates a tracker
+- `RecordProbe(rtt, err)` — register a probe result (RTT + success/failure)
+- `WrapConn(net.Conn, *Tracker) net.Conn` — passively record throughput
+- `Score() int` — composite score 0–100
+- `ConnectionInfo() ConnectionInfo` — full snapshot (RTT min/avg/max, jitter, throughput, uptime)
+- `ProbeTCP` / `ProbeSOCKSHandshake` — optional active health-check helpers
 
-Server side: you can enable linkquality for outbound hops by passing a tracker
-into the server (`server.WithLinkQuality(tr)` or `srv.LinkQualityTracker()` if
-created by the CLI) and reading `tr.Score()` or `tr.ConnectionInfo()` whenever
-you need to rank/inspect routes. The `s5 server` CLI also supports
-`-linkquality`/`-linkquality-interval`, emitting the same stderr snapshots for
-direct dials or upstream chains, so you can monitor hop health without touching
-the traffic. To log connection accepts/closes with peer addresses, pass
-`-log-connections` (CLI) or use `server.WithConnectionLogging(true)` in code.
+On the server side, pass `server.WithLinkQuality(tracker)` and read
+`srv.LinkQualityTracker()` to monitor outbound hop health. The CLI flags
+`-linkquality` / `-linkquality-interval` emit periodic snapshots to stderr for
+both `s5 server` and `s5 dial`.
 
-To view live quality snapshots when using the bundled CLI, start `s5 dial` with
-`-linkquality` (and optionally `-linkquality-interval 2s`). The tool will print
-the composite score, success ratio, RTT/jitter and throughput estimates to
-stderr at the requested cadence without affecting traffic flow:
+## Middleware
 
-```
-s5 dial -socks host:1080 -dest example.com:443 -linkquality -stdio
-[linkquality] score=94 | success=3/3 | uptime=100.0%
-[linkquality] latency: min/avg/max 18.3ms/21.5ms/24.2ms | jitter: 1.9ms | throughput: 820.0 KB/s (peak 1040.5)
-```
-
-- Use `Association.RelayAddress()` if you need the relay endpoint for firewall
-  rules or observability, without risking in-place mutation.
-- The helper preserves datagram boundaries and accepts both SOCKS-aware
-  addresses (`client.UDPAddr`) and native `*net.UDPAddr` values.
-
-### Production checklist
-
-Operational readiness:
-
-- Run the SOCKS listener behind TLS when crossing untrusted networks. The
-  client helpers accept the same `tls.Config` tuning you would expect from
-  HTTPS clients—set `MinVersion` to at least TLS 1.2 and populate
-  `ServerName` so certificate verification succeeds.
-- Configure client helpers with explicit deadlines (`context.Context` or
-  `WithHandshakeTimeout`/`WithIOTimeout`) and, for long-lived tunnels, enable
-  UDP keep-alives via `client.WithUDPKeepAlive` to keep stateful firewalls from
-  reclaiming the association.
-- Decide on logging verbosity up front. Use `client.NewStdLogger` combined with
-  `client.WithLogger` to surface helper diagnostics, or `client.NewSilentLogger`
-  to suppress them entirely when running inside higher-level frameworks.
-- Monitor relay health using the TCP helper’s `Relay` return values: wrap calls
-  and feed errors into your observability pipeline so asymmetric failures do
-  not go unnoticed.
-
-Security hardening:
-
-- Prefer mutually authenticated TLS (mTLS) for administrative or
-  intra-datacenter deployments. The README’s TLS section shows how to inject a
-  CA pool and enable `tls.RequireAndVerifyClientCert`.
-- Rotate credentials regularly and leverage the rules engine to scope
-  high-privilege accounts to the minimum set of destinations.
-- The UDP helper intentionally ignores fragmented datagrams (`FRAG != 0`). This
-  is documented under Compatibility; plan accordingly if your workload requires
-  oversized datagrams.
-
-Authentication
-- NoAuth (default)
-  - Enabled when no credentials are provided.
-- Username/Password
-  - Provide `WithCredential(auth.StaticCredentials)` or `WithAuthMethods` including `auth.UserPassAuthenticator`.
-- Mutual TLS (mTLS)
-  - Run the server on a TLS listener with `ClientAuth: tls.RequireAndVerifyClientCert`.
-  - Using `ListenAndServeTLS` automatically enriches the `AuthContext.Payload` with TLS peer details you can use in rules or logging:
-    - `tls.subject`, `tls.issuer`, `tls.san.dns`, `tls.san.ip`, `tls.fingerprint.sha256`.
-  - Example below in TLS and mTLS.
-
-Options (With... API)
-- Authentication
-  - `WithAuthMethods([]auth.Authenticator)`
-  - `WithCredential(auth.CredentialStore)`
-- Rules/ACL
-  - `WithRule(rules.RuleSet)`
-- Resolver
-  - `WithResolver(resolver.NameResolver)`
-- Rewriter
-  - `WithRewriter(handler.AddressRewriter)`
-- Dialing
-  - `WithDial(func(ctx, network, addr) (net.Conn, error))`
-  - `WithDialAndRequest(func(ctx, network, addr, req) (net.Conn, error))`
-  - `WithDialer(net.Dialer)`
-- TCP
-  - `WithHandshakeTimeout(time.Duration)`
-  - `WithTCPKeepAlive(time.Duration)`
-  - `WithBindIP(net.IP)`
-- Connection lifecycle & metadata
-  - `WithBaseContext(func(net.Listener) context.Context)`
-  - `WithConnContext(func(context.Context, net.Conn) context.Context)`
-  - `WithConnState(func(net.Conn, server.ConnState))`
-  - `WithConnMetadata(func(net.Conn) map[string]string)`
-- BIND
-  - `WithBindAcceptTimeout(time.Duration)`
-  - `WithBindPeerCheckIPOnly(bool)`
-- UDP ASSOCIATE
-  - `WithUseBindIpBaseResolveAsUdpAddr(bool)`
-  - `WithUDPAssociateLimits(maxPeers int, idleTimeout time.Duration)`
-- Infra
-  - `WithGPool(GPool)`, `WithLogger(Logger)`, `WithBufferPool(buffer.BufPool)`
-
-### Connection context & metadata
-
-`Server.ServeContext(ctx, listener)` binds the provided context to the accept loop and every connection derived from it. Combine it with `WithConnContext` to attach request-scoped values, `WithConnMetadata` to surface immutable attributes on `handler.Request.Metadata`, and `WithConnState` to observe lifecycle transitions.
-
-`handler.Request` now exposes the derived `Context` and the optional `Metadata` map so custom middleware, dialers, and handlers can consume the same data without wrapping `net.Conn`.
+`handler.Middleware` is `func(ctx context.Context, w io.Writer, req *handler.Request) error`.
+Returning a non-nil error aborts the request before the command handler runs.
 
 ```go
-ctx, cancel := context.WithCancel(context.Background())
-srv := socks5.New(
-    server.WithConnContext(func(ctx context.Context, conn net.Conn) context.Context {
-        return context.WithValue(ctx, ctxKey{}, selectNode(conn))
-    }),
-    server.WithConnMetadata(func(conn net.Conn) map[string]string {
-        return map[string]string{"session_id": shortID(conn)}
-    }),
-)
-go srv.ServeContext(ctx, listener)
-// ... later
-cancel() // drains every connection
-```
-
-Examples
-Basic server
-```
-s := socks5.New(
-    socks5.WithHandshakeTimeout(5*time.Second),
-    socks5.WithTCPKeepAlive(30*time.Second),
-)
-log.Fatal(s.ListenAndServe("tcp", ":1080"))
-```
-
-TLS and mTLS
-```
-cfg := &tls.Config{
-    Certificates: []tls.Certificate{cert},
-    // For mTLS
-    ClientAuth: tls.RequireAndVerifyClientCert,
-    ClientCAs:  clientCAPool,
-}
-
-s := socks5.New(
-    socks5.WithHandshakeTimeout(5*time.Second),
-)
-log.Fatal(s.ListenAndServeTLS("tcp", ":1080", cfg))
-```
-Note: when TLS is enabled, the server completes the handshake early and enriches `AuthContext.Payload` with client certificate identity (subject, issuer, SANs, SHA‑256 fingerprint) for rules/ACLs or logging.
-
-Username/password authentication
-```
-creds := auth.StaticCredentials{"alice": "secret", "bob": "p@ss"}
-s := socks5.New(
-    socks5.WithCredential(creds), // automatically enables User/Pass
-)
-log.Fatal(s.ListenAndServe("tcp", ":1080"))
-```
-
-Custom rules/ACLs
-The `rules` package provides a default `PermitAll`. You can implement your own `RuleSet`:
-```
-type onlyLocal struct{}
-func (onlyLocal) Allow(ctx context.Context, req *handler.Request) (context.Context, bool) {
-    ip := req.DestAddr.IP
-    if ip.IsLoopback() || ip.IsPrivate() {
-        return ctx, true
-    }
-    return ctx, false
-}
-
-s := socks5.New(
-    socks5.WithRule(onlyLocal{}),
-)
-```
-
-Custom DNS resolver
-```
-type staticResolver struct{}
-func (staticResolver) Resolve(ctx context.Context, host string) (context.Context, net.IP, error) {
-    // example: force 1.2.3.4
-    return ctx, net.ParseIP("1.2.3.4"), nil
-}
-
-s := socks5.New(
-    socks5.WithResolver(staticResolver{}),
-)
-```
-
-Address rewriter
-```
-type rewriteToLocal struct{}
-func (rewriteToLocal) Rewrite(ctx context.Context, r *handler.Request) (context.Context, *protocol.AddrSpec) {
-    // redirect everything to the same port on 127.0.0.1
-    d := *r.DestAddr
-    d.IP = net.ParseIP("127.0.0.1")
-    d.FQDN = ""
-    return ctx, &d
-}
-
-s := socks5.New(socks5.WithRewriter(rewriteToLocal{}))
-```
-
-Middleware for logging/metrics
-```
-logMW := handler.MiddlewareFunc(func(next handler.Handler) handler.Handler {
-    return func(ctx context.Context, w io.Writer, r *handler.Request) error {
-        start := time.Now()
-        err := next(ctx, w, r)
-        dur := time.Since(start)
-        log.Printf("%s %s -> %s in %v (err=%v)", r.CommandName(), r.RemoteAddr, r.DestAddr, dur, err)
-        return err
-    }
+logMW := handler.Middleware(func(ctx context.Context, w io.Writer, r *handler.Request) error {
+    log.Printf("cmd=%d src=%s dst=%s", r.Command, r.RemoteAddr, r.DestAddr)
+    return nil
 })
 
 s := socks5.New(
@@ -519,155 +279,21 @@ s := socks5.New(
 )
 ```
 
-Upstream chaining (server-side)
-Use `WithDial` or `WithDialAndRequest` to relay TCP traffic through another SOCKS5 proxy.
-```
-import xproxy "golang.org/x/net/proxy"
+Full handler replacement is available via `WithConnectHandle`, `WithBindHandle`,
+and `WithAssociateHandle`.
 
-upstream, _ := xproxy.SOCKS5("tcp", "hop2.example:1080", nil, &net.Dialer{})
+## Compatibility
 
-dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-    type ctxDialer interface{ DialContext(context.Context, string, string) (net.Conn, error) }
-    if d, ok := upstream.(ctxDialer); ok { return d.DialContext(ctx, network, addr) }
-    return upstream.Dial(network, addr)
-}
-
-s := socks5.New(socks5.WithDial(dial))
-```
-
-Client-side chaining with ProxyChains
-Example of a strict chain with 3 hops:
-```
-# ~/.proxychains/proxychains.conf
-strict_chain
-quiet_mode
-proxy_dns
-[ProxyList]
-socks5 127.0.0.1 1080
-socks5 10.0.0.2 1080 user pass
-socks5 example.last 1080
-```
-Run: `proxychains4 -q curl https://ifconfig.me`
-
-Client: multi-hop DialChain
-```
-chain := []client.Hop{{Address:"127.0.0.1:1080"}, {Address:"10.0.0.2:1080"}}
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
-conn, err := cli.DialChain(ctx, chain, "ifconfig.me:443", 5*time.Second)
-```
-
-Advanced BIND options
-```
-s := socks5.New(
-    socks5.WithBindIP(net.ParseIP("0.0.0.0")),
-    socks5.WithBindAcceptTimeout(30*time.Second),
-    socks5.WithBindPeerCheckIPOnly(true), // validate peer by IP only
-)
-```
-
-Advanced UDP ASSOCIATE options
-```
-s := socks5.New(
-    socks5.WithUseBindIpBaseResolveAsUdpAddr(true), // bind UDP socket to bindIP
-    socks5.WithUDPAssociateLimits(1024, 2*time.Minute), // peer limit and idle GC
-)
-```
-Notes:
-- For FQDN destinations, the server preserves the hostname and selects `udp4` or `udp6` to match the client’s address family.
-- Datagram packets with `FRAG != 0` are dropped.
-
-Performance Notes
-- Proxy I/O uses a shared buffer pool and fast paths (`io.WriterTo`/`io.ReaderFrom`) where safe.
-- To avoid platform‑specific hangs with certain reader implementations, the proxy prefers `WriteTo`, and selectively uses `ReadFrom` for well‑behaved readers (e.g., `*bytes.Reader`, `*strings.Reader`).
-- The proxy attempts half‑closes (`CloseWrite`/`CloseRead`) where supported.
-
-Handshake timeout and TCP keep-alive
-```
-s := socks5.New(
-    socks5.WithHandshakeTimeout(5*time.Second),
-    socks5.WithTCPKeepAlive(30*time.Second),
-)
-```
-
-Buffer pool tuning and GPool integration
-```
-// 64 KiB buffer pool
-s := socks5.New(
-    socks5.WithBufferPool(buffer.NewPool(64*1024)),
-)
-
-// Integrate with an external goroutine pool
-var myPool GPool = newMyPool()
-s = socks5.New(socks5.WithGPool(myPool))
-```
-
-Compatibility
 - Conforms to SOCKS5 (RFC 1928) for CONNECT, BIND, and UDP ASSOCIATE.
-- Accurate REP code mapping for typical dial errors.
-- UDP: fragmented datagrams (FRAG != 0) are not supported.
-- ProxyChains does not implement end‑to‑end UDP ASSOCIATE (only optional DNS‑over‑TCP).
-- BIND: expected peer validation; with `WithBindPeerCheckIPOnly(true)`, matches by IP only.
+- REP codes are mapped accurately from typical dial errors.
+- UDP: fragmented datagrams (`FRAG != 0`) are dropped and not reassembled.
+- BIND: the incoming peer is validated against the expected address; set
+  `WithBindPeerCheckIPOnly(true)` to match by IP only (ignore port).
 
-Testing
-Run the test suite:
+## Testing
+
 ```
 go test ./...
 ```
 
-Client multi-hop DialChain and UDP/BIND examples
-
-Multi-hop DialChain
-```
-chain := []client.Hop{
-  { Address: "127.0.0.1:1080" },
-  { Address: "10.0.0.2:1080" },
-}
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
-conn, err := cli.DialChain(ctx, chain, "ifconfig.me:443", 5*time.Second)
-if err != nil { /* handle */ }
-defer conn.Close()
-```
-
-Per-hop TLS and credentials
-```
-chain := []client.Hop{
-  { Address: "10.0.0.2:1080", Creds: &client.Credentials{Username: "alice", Password: "secret"} },
-  { Address: "hop3.example:1080", TLSConfig: &tls.Config{ServerName: "hop3.example", MinVersion: tls.VersionTLS12} },
-}
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
-conn, err := cli.DialChain(ctx, chain, "example.org:443", 5*time.Second)
-```
-
-Notes:
-- Per-hop creds/TLS are optional via Hop.{Creds,TLSConfig}.
-- DialChain respects ctx and client timeouts; set client.WithHandshakeTimeout/client.WithIOTimeout.
-- Control the first-hop dial with client.WithDialer (custom net.Dialer) or the dialTimeout argument.
-
-UDP and BIND on the last hop
-```
-// Build the TCP chain first
-// Pass empty finalTarget to stop at the last hop and speak to the SOCKS server
-cli := client.New(client.WithHandshakeTimeout(5*time.Second), client.WithIOTimeout(5*time.Second))
-conn, err := cli.DialChain(ctx, chain, "", 5*time.Second)
-if err != nil { /* handle */ }
-defer conn.Close()
-
-// UDP ASSOCIATE
-assoc, rep, err := cli.UDPAssociate(ctx, conn)
-if err != nil { /* handle */ }
-defer assoc.Close()
-dst := socks5protocol.AddrSpec{IP: net.ParseIP("127.0.0.1"), Port: 9999, AddrType: socks5protocol.ATYPIPv4}
-_, _ = assoc.WriteTo(dst, []byte("ping"))
-
-// CONNECT helper with TCP stream utilities
-stream, _, err := cli.ConnectStream(ctx, conn, socks5protocol.AddrSpec{FQDN: "example.org", Port: 443, AddrType: socks5protocol.ATYPDomain})
-if err != nil { /* handle */ }
-defer stream.Close()
-_, _ = stream.WriteString("GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
-
-
-// BIND (two-step)
-peer := socks5protocol.AddrSpec{IP: net.ParseIP("0.0.0.0"), Port: 0, AddrType: socks5protocol.ATYPIPv4}
-first, second, err := cli.Bind(ctx, conn, peer)
-_ = first; _ = second // see bind.go for details
-```
+The test suite is race-clean (`-race`) and runs on every push via CI.

@@ -16,7 +16,7 @@ func NewPool(size int) BufPool {
 	return &pool{
 		size: size,
 		pool: &sync.Pool{
-			New: func() interface{} { return make([]byte, 0, size) },
+			New: func() any { return make([]byte, 0, size) },
 		},
 	}
 }

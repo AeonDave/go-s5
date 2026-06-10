@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -71,8 +73,16 @@ type Server struct {
 	connMetadata                  func(net.Conn) map[string]string
 
 	linkTracker *linkquality.Tracker
-	activeConns int64
+	activeConns atomic.Int64
+
+	mu         sync.Mutex
+	listeners  map[net.Listener]context.CancelFunc
+	inShutdown atomic.Bool
 }
+
+// ErrServerClosed is returned by Serve, ServeContext, ListenAndServe and
+// ListenAndServeTLS after a call to Shutdown or Close.
+var ErrServerClosed = errors.New("socks5: server closed")
 
 func New(opts ...Option) *Server {
 	srv := &Server{
@@ -118,8 +128,13 @@ func (sf *Server) Serve(l net.Listener) error {
 	return sf.ServeContext(context.Background(), l)
 }
 
-// ServeContext serves SOCKS5 on l until ctx is done or an unrecoverable error occurs.
+// ServeContext serves SOCKS5 on l until ctx is done, Shutdown/Close is called,
+// or an unrecoverable error occurs. Canceling ctx tears down every active
+// connection; Shutdown lets in-flight connections finish.
 func (sf *Server) ServeContext(ctx context.Context, l net.Listener) error {
+	if sf.inShutdown.Load() {
+		return ErrServerClosed
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -128,32 +143,112 @@ func (sf *Server) ServeContext(ctx context.Context, l net.Listener) error {
 			ctx = base
 		}
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	connCtx, cancelConns := context.WithCancel(ctx)
+	sf.registerListener(l, cancelConns)
+	defer sf.unregisterListener(l)
+
 	var closeOnce sync.Once
 	closeListener := func() { closeOnce.Do(func() { _ = l.Close() }) }
 	defer closeListener()
+	watchDone := make(chan struct{})
+	defer close(watchDone)
 	go func() {
-		<-ctx.Done()
-		closeListener()
+		select {
+		case <-ctx.Done():
+			closeListener()
+		case <-watchDone:
+		}
 	}()
+
 	var tempDelay time.Duration
 	for {
 		conn, err := sf.acceptWithBackoff(l, &tempDelay)
 		if err != nil {
 			if ctx.Err() != nil {
+				cancelConns()
 				return ctx.Err()
 			}
+			if sf.inShutdown.Load() {
+				// Graceful shutdown: stop accepting but let active
+				// connections finish; Shutdown cancels connCtx after draining.
+				return ErrServerClosed
+			}
+			cancelConns()
 			return err
 		}
 		if conn == nil {
 			if ctx.Err() != nil {
+				cancelConns()
 				return ctx.Err()
 			}
 			continue
 		}
 		tempDelay = 0
-		sf.onAcceptedConn(ctx, conn)
+		sf.onAcceptedConn(connCtx, conn)
+	}
+}
+
+func (sf *Server) registerListener(l net.Listener, cancelConns context.CancelFunc) {
+	sf.mu.Lock()
+	defer sf.mu.Unlock()
+	if sf.listeners == nil {
+		sf.listeners = make(map[net.Listener]context.CancelFunc)
+	}
+	sf.listeners[l] = cancelConns
+}
+
+func (sf *Server) unregisterListener(l net.Listener) {
+	sf.mu.Lock()
+	defer sf.mu.Unlock()
+	delete(sf.listeners, l)
+}
+
+// closeListeners closes every tracked listener; when cancelConns is true the
+// per-listener connection contexts are canceled too, killing active conns.
+func (sf *Server) closeListeners(cancelConns bool) error {
+	sf.mu.Lock()
+	defer sf.mu.Unlock()
+	var err error
+	for l, cancel := range sf.listeners {
+		if cerr := l.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+		if cancelConns {
+			cancel()
+		}
+	}
+	return err
+}
+
+// Close immediately closes all listeners and tears down every active
+// connection. For a graceful stop, use Shutdown.
+func (sf *Server) Close() error {
+	sf.inShutdown.Store(true)
+	return sf.closeListeners(true)
+}
+
+// Shutdown gracefully stops the server: it closes all listeners so no new
+// connections are accepted, then polls until active connections drain or ctx
+// is done. If ctx expires first, Shutdown returns ctx.Err() with connections
+// still running; call Close to force them down.
+func (sf *Server) Shutdown(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sf.inShutdown.Store(true)
+	closeErr := sf.closeListeners(false)
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if sf.activeConns.Load() == 0 {
+			return closeErr
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -188,7 +283,7 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 	connCtx := sf.decorateConnContext(ctx, conn)
 	cancelableCtx, cancel := context.WithCancel(connCtx)
 	sf.trackConnState(conn, StateNew)
-	active := atomic.AddInt64(&sf.activeConns, 1)
+	active := sf.activeConns.Add(1)
 	if sf.logConnections && sf.logger != nil {
 		sf.logger.Infof("accepted %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
 	}
@@ -199,7 +294,7 @@ func (sf *Server) onAcceptedConn(ctx context.Context, conn net.Conn) {
 			sf.logger.Errorf("server: %v", err)
 		}
 		sf.trackConnState(conn, StateClosed)
-		active := atomic.AddInt64(&sf.activeConns, -1)
+		active := sf.activeConns.Add(-1)
 		if sf.logConnections && sf.logger != nil {
 			sf.logger.Infof("closed %s -> %s (active=%d)", conn.RemoteAddr(), conn.LocalAddr(), active)
 		}
@@ -330,10 +425,8 @@ func allIPsFromCert(cert *x509.Certificate) []string {
 
 func (sf *Server) authenticate(conn io.Writer, bufConn io.Reader, userAddr string, methods []byte) (*auth.AContext, error) {
 	for _, authMethod := range sf.authMethods {
-		for _, method := range methods {
-			if authMethod.GetCode() == method {
-				return authMethod.Authenticate(bufConn, conn, userAddr)
-			}
+		if slices.Contains(methods, authMethod.GetCode()) {
+			return authMethod.Authenticate(bufConn, conn, userAddr)
 		}
 	}
 	_, _ = conn.Write([]byte{protocol.VersionSocks5, protocol.MethodNoAcceptable})
@@ -376,11 +469,7 @@ func (sf *Server) buildMetadata(conn net.Conn) map[string]string {
 	if len(raw) == 0 {
 		return nil
 	}
-	clone := make(map[string]string, len(raw))
-	for k, v := range raw {
-		clone[k] = v
-	}
-	return clone
+	return maps.Clone(raw)
 }
 
 // LinkQualityTracker returns the tracker used for outbound hops, if enabled.

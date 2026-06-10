@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -16,7 +17,63 @@ import (
 
 type udpPeer struct {
 	conn     net.Conn
-	lastSeen int64 // unix nano
+	lastSeen atomic.Int64 // unix nano
+}
+
+// udpFlowKey identifies a client->destination UDP flow without allocating
+// per-packet strings. For IP destinations dst carries the resolved address;
+// for unresolved FQDN flows fqdn is set and dst holds only the port.
+type udpFlowKey struct {
+	src  netip.AddrPort
+	dst  netip.AddrPort
+	fqdn string
+}
+
+func udpFlowKeyFor(src *net.UDPAddr, dst *protocol.AddrSpec) udpFlowKey {
+	key := udpFlowKey{src: src.AddrPort()}
+	if a, ok := netip.AddrFromSlice(dst.IP); ok {
+		key.dst = netip.AddrPortFrom(a.Unmap(), uint16(dst.Port))
+	} else {
+		key.fqdn = dst.FQDN
+		key.dst = netip.AddrPortFrom(netip.Addr{}, uint16(dst.Port))
+	}
+	return key
+}
+
+// udpPeerTable wraps sync.Map with an O(1) size counter so per-datagram peer
+// limit checks do not scan the whole table.
+type udpPeerTable struct {
+	peers sync.Map
+	count atomic.Int64
+}
+
+func (t *udpPeerTable) load(key udpFlowKey) (*udpPeer, bool) {
+	v, ok := t.peers.Load(key)
+	if !ok {
+		return nil, false
+	}
+	return v.(*udpPeer), true
+}
+
+func (t *udpPeerTable) store(key udpFlowKey, p *udpPeer) {
+	t.peers.Store(key, p)
+	t.count.Add(1)
+}
+
+// delete removes key and decrements the counter only when the entry was still
+// present, so concurrent double-deletes stay balanced.
+func (t *udpPeerTable) delete(key udpFlowKey) {
+	if _, ok := t.peers.LoadAndDelete(key); ok {
+		t.count.Add(-1)
+	}
+}
+
+func (t *udpPeerTable) len() int { return int(t.count.Load()) }
+
+func (t *udpPeerTable) rangeAll(f func(key udpFlowKey, p *udpPeer) bool) {
+	t.peers.Range(func(k, v any) bool {
+		return f(k.(udpFlowKey), v.(*udpPeer))
+	})
 }
 
 func minDuration(a, b time.Duration) time.Duration {
@@ -30,20 +87,6 @@ func minDuration(a, b time.Duration) time.Duration {
 		return a
 	}
 	return b
-}
-
-//goland:noinspection GoUnusedFunction
-func udpNetworkFor(ip net.IP) string {
-	if len(ip) == 0 {
-		return "udp"
-	}
-	if ip.To4() != nil {
-		return "udp4"
-	}
-	if ip.To16() != nil {
-		return "udp6"
-	}
-	return "udp"
 }
 
 func (sf *Server) handleAssociate(ctx context.Context, writer io.Writer, request *handler.Request) error {
@@ -79,18 +122,14 @@ func (sf *Server) udpBindAddrForAssociate(request *handler.Request) *net.UDPAddr
 }
 
 func (sf *Server) udpAssociateLoop(ctx context.Context, bindLn *net.UDPConn, request *handler.Request) {
-	conns := &sync.Map{}
+	conns := &udpPeerTable{}
 	resolvedCache := &sync.Map{}
 	buf, put := sf.borrowBuf()
 	defer func() {
 		put()
 		sf.closeIgnoreErr("udp listener", bindLn)
-		conns.Range(func(key, value any) bool {
-			if p, ok := value.(*udpPeer); ok && p != nil {
-				sf.closeIgnoreErr(nameUDPTarget, p.conn)
-			} else {
-				sf.logger.Errorf("conns has illegal item %v:%v", key, value)
-			}
+		conns.rangeAll(func(_ udpFlowKey, p *udpPeer) bool {
+			sf.closeIgnoreErr(nameUDPTarget, p.conn)
 			return true
 		})
 	}()
@@ -135,10 +174,16 @@ func (sf *Server) nextValidUDP(bindLn *net.UDPConn, buf []byte, request *handler
 
 type resolvedEntry struct {
 	addr     protocol.AddrSpec
-	lastSeen int64
+	lastSeen atomic.Int64
 }
 
-func (sf *Server) startUDPIdleReaper(conns *sync.Map, resolvedCache *sync.Map) func() {
+func newResolvedEntry(addr protocol.AddrSpec, now int64) *resolvedEntry {
+	e := &resolvedEntry{addr: addr}
+	e.lastSeen.Store(now)
+	return e
+}
+
+func (sf *Server) startUDPIdleReaper(conns *udpPeerTable, resolvedCache *sync.Map) func() {
 	if sf.udpIdleTimeout <= 0 {
 		return nil
 	}
@@ -149,19 +194,17 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map, resolvedCache *sync.Map) f
 			select {
 			case <-ticker.C:
 				deadline := time.Now().Add(-sf.udpIdleTimeout).UnixNano()
-				conns.Range(func(key, value any) bool {
-					if p, ok := value.(*udpPeer); ok {
-						if atomic.LoadInt64(&p.lastSeen) < deadline {
-							sf.closeIgnoreErr("udp target idle", p.conn)
-							conns.Delete(key)
-						}
+				conns.rangeAll(func(key udpFlowKey, p *udpPeer) bool {
+					if p.lastSeen.Load() < deadline {
+						sf.closeIgnoreErr("udp target idle", p.conn)
+						conns.delete(key)
 					}
 					return true
 				})
 				if resolvedCache != nil {
 					resolvedCache.Range(func(key, value any) bool {
 						if entry, ok := value.(*resolvedEntry); ok {
-							if atomic.LoadInt64(&entry.lastSeen) < deadline {
+							if entry.lastSeen.Load() < deadline {
 								resolvedCache.Delete(key)
 							}
 						}
@@ -176,50 +219,51 @@ func (sf *Server) startUDPIdleReaper(conns *sync.Map, resolvedCache *sync.Map) f
 	return func() { ticker.Stop(); close(stopCh) }
 }
 
-func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *sync.Map, resolvedCache *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
+func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, conns *udpPeerTable, resolvedCache *sync.Map, srcAddr *net.UDPAddr, pk protocol.Datagram, request *handler.Request) {
 	dstAddr := pk.DstAddr // Value copy: struct assignment in Go creates a copy, not an alias
 	now := time.Now().UnixNano()
-	var flowKey string
+	var flowKey udpFlowKey
+	hasFlowKey := false
 	if dstAddr.FQDN != "" {
-		flowKey = srcAddr.String() + "--" + dstAddr.FQDN + ":" + strconv.Itoa(dstAddr.Port)
+		flowKey = udpFlowKeyFor(srcAddr, &dstAddr)
+		hasFlowKey = true
 		_, ip, err := sf.resolver.Resolve(ctx, dstAddr.FQDN)
 		if err == nil && ip != nil {
 			dstAddr.IP = ip
 			dstAddr.AddrType = protocol.AddrTypeFromIP(ip)
 			dstAddr.FQDN = ""
-			resolvedCache.Store(flowKey, &resolvedEntry{addr: dstAddr, lastSeen: now})
+			resolvedCache.Store(flowKey, newResolvedEntry(dstAddr, now))
 		} else if err != nil {
 			sf.logger.Errorf("resolve %s failed: %v", dstAddr.FQDN, err)
 			if cached, ok := resolvedCache.Load(flowKey); ok {
 				if cachedEntry, ok := cached.(*resolvedEntry); ok {
 					dstAddr = cachedEntry.addr
-					atomic.StoreInt64(&cachedEntry.lastSeen, now)
+					cachedEntry.lastSeen.Store(now)
 				}
 			}
 		}
 	}
 
-	connKey := srcAddr.String() + "--" + dstAddr.String()
-	if v, ok := conns.Load(connKey); ok {
-		p := v.(*udpPeer)
+	connKey := udpFlowKeyFor(srcAddr, &dstAddr)
+	if p, ok := conns.load(connKey); ok {
 		if _, err := p.conn.Write(pk.Data); err != nil {
 			sf.logger.Errorf("write data to remote server failed, %v", err)
 			sf.closeIgnoreErr(nameUDPTarget, p.conn)
-			conns.Delete(connKey)
+			conns.delete(connKey)
 			return
 		}
-		atomic.StoreInt64(&p.lastSeen, time.Now().UnixNano())
-		if flowKey != "" {
+		p.lastSeen.Store(time.Now().UnixNano())
+		if hasFlowKey {
 			if cached, ok := resolvedCache.Load(flowKey); ok {
 				if cachedEntry, ok := cached.(*resolvedEntry); ok {
-					atomic.StoreInt64(&cachedEntry.lastSeen, time.Now().UnixNano())
+					cachedEntry.lastSeen.Store(time.Now().UnixNano())
 				}
 			}
 		}
 		return
 	}
 
-	if sf.reachUDPMaxPeers(conns) {
+	if sf.udpMaxPeers > 0 && conns.len() >= sf.udpMaxPeers {
 		return
 	}
 
@@ -238,8 +282,8 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 	}
 
 	p := &udpPeer{conn: targetNew}
-	atomic.StoreInt64(&p.lastSeen, time.Now().UnixNano())
-	conns.Store(connKey, p)
+	p.lastSeen.Store(time.Now().UnixNano())
+	conns.store(connKey, p)
 
 	header := pk.Header()
 	srcCopy := *srcAddr
@@ -248,18 +292,9 @@ func (sf *Server) handleUDPDatagram(ctx context.Context, bindLn *net.UDPConn, co
 	if _, err := targetNew.Write(pk.Data); err != nil {
 		sf.logger.Errorf("write data to remote server %s failed, %v", targetNew.RemoteAddr().String(), err)
 		sf.closeIgnoreErr(nameUDPTarget, targetNew)
-		conns.Delete(connKey)
+		conns.delete(connKey)
 		return
 	}
-}
-
-func (sf *Server) reachUDPMaxPeers(conns *sync.Map) bool {
-	if sf.udpMaxPeers <= 0 {
-		return false
-	}
-	cur := 0
-	conns.Range(func(_, _ any) bool { cur++; return true })
-	return cur >= sf.udpMaxPeers
 }
 
 func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, dstAddr *protocol.AddrSpec) (networks []string, addr string) {
@@ -284,11 +319,11 @@ func (sf *Server) selectUDPDial(srcAddr *net.UDPAddr, dstAddr *protocol.AddrSpec
 	return
 }
 
-func (sf *Server) pipeUDPFromTarget(bindLn *net.UDPConn, conns *sync.Map, connKey string, target net.Conn, header []byte, srcAddr *net.UDPAddr) {
+func (sf *Server) pipeUDPFromTarget(bindLn *net.UDPConn, conns *udpPeerTable, connKey udpFlowKey, target net.Conn, header []byte, srcAddr *net.UDPAddr) {
 	rbuf, rput := sf.borrowBuf()
 	defer func() {
 		sf.closeIgnoreErr(nameUDPTarget, target)
-		conns.Delete(connKey)
+		conns.delete(connKey)
 		rput()
 	}()
 	wbuf, wput := sf.borrowBuf()
@@ -304,10 +339,8 @@ func (sf *Server) pipeUDPFromTarget(bindLn *net.UDPConn, conns *sync.Map, connKe
 			sf.logger.Errorf("read data from remote %s failed, %v", target.RemoteAddr().String(), err)
 			return
 		}
-		if v, ok := conns.Load(connKey); ok {
-			if p0, ok2 := v.(*udpPeer); ok2 {
-				atomic.StoreInt64(&p0.lastSeen, time.Now().UnixNano())
-			}
+		if p, ok := conns.load(connKey); ok {
+			p.lastSeen.Store(time.Now().UnixNano())
 		}
 		proBuf := wbuf[:0]
 		proBuf = append(proBuf, header...)

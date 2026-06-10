@@ -3,6 +3,7 @@ package socks5_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -108,9 +109,10 @@ func TestServeContextCancellationPropagates(t *testing.T) {
 				handlerDone <- struct{}{}
 				return ctx.Err()
 			case <-time.After(time.Second):
-				t.Fatalf("context was not canceled")
-				// t.Fatalf will terminate the test, but we need to return to satisfy the function signature
-				return nil
+				// Cannot call t.Fatalf from a non-test goroutine; the main
+				// goroutine fails on the "handler did not observe cancellation"
+				// timeout below.
+				return errors.New("context was not canceled")
 			}
 		}),
 	)

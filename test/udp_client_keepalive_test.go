@@ -102,6 +102,12 @@ func TestUDPAssociationReadFromReusesBuffer(t *testing.T) {
 			panic(err)
 		}
 	})
-	require.LessOrEqual(t, atomic.LoadInt32(&newCalls), int32(2))
+	// Under -race, sync.Pool intentionally drops a fraction of Put calls,
+	// so strict reuse cannot be asserted there.
+	maxNewCalls := int32(2)
+	if raceEnabled {
+		maxNewCalls = 25
+	}
+	require.LessOrEqual(t, atomic.LoadInt32(&newCalls), maxNewCalls)
 	require.Equal(t, payload, buf[:len(payload)])
 }

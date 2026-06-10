@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,47 @@ import (
 	server "github.com/AeonDave/go-s5/server"
 	"github.com/stretchr/testify/require"
 )
+
+// dialRecorder collects the networks attempted by a custom dialer from the
+// server goroutines, safe for concurrent access with the test goroutine.
+type dialRecorder struct {
+	mu         sync.Mutex
+	attempts   []string
+	pipeServer net.Conn
+}
+
+func (r *dialRecorder) record(network string) (first bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attempts = append(r.attempts, network)
+	return len(r.attempts) == 1
+}
+
+func (r *dialRecorder) setPipe(c net.Conn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pipeServer = c
+}
+
+func (r *dialRecorder) count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.attempts)
+}
+
+func (r *dialRecorder) firstTwo() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.attempts[:2]...)
+}
+
+func (r *dialRecorder) closePipe() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pipeServer != nil {
+		_ = r.pipeServer.Close()
+	}
+}
 
 // startSocks5On starts a SOCKS5 server listening on the given TCP address (e.g. "127.0.0.1:0" or "[::1]:0").
 func startSocks5On(t *testing.T, laddr string, opts ...server.Option) (listen string, stop func()) {
@@ -33,24 +75,18 @@ func startSocks5On(t *testing.T, laddr string, opts ...server.Option) (listen st
 
 // Ensure UDP ASSOCIATE prefers udp4 when the client UDP source is IPv4, and falls back to udp6.
 func TestUDP_FQDN_FallbackOrder_IPv4Client(t *testing.T) {
-	var attempts []string
-	var pipeServer net.Conn
-	t.Cleanup(func() {
-		if pipeServer != nil {
-			_ = pipeServer.Close()
-		}
-	})
+	rec := &dialRecorder{}
+	t.Cleanup(rec.closePipe)
 
 	listen, stop := startSocks5(t,
 		server.WithDialAndRequest(func(ctx context.Context, network, addr string, _ *handler.Request) (net.Conn, error) {
-			attempts = append(attempts, network)
 			// Fail first attempt to force fallback
-			if len(attempts) == 1 {
+			if rec.record(network) {
 				return nil, fmt.Errorf("fail first attempt")
 			}
 			// Succeed with a pipe that drains writes
 			client, srv := net.Pipe()
-			pipeServer = srv
+			rec.setPipe(srv)
 			go func() {
 				_, _ = io.Copy(io.Discard, srv)
 			}() // drain server side
@@ -95,8 +131,8 @@ func TestUDP_FQDN_FallbackOrder_IPv4Client(t *testing.T) {
 	msg = append(msg, []byte("ping")...)
 	_, _ = client.WriteTo(msg, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: rep.BndAddr.Port})
 
-	require.Eventually(t, func() bool { return len(attempts) >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
-	require.Equal(t, []string{"udp4", "udp6"}, attempts[:2])
+	require.Eventually(t, func() bool { return rec.count() >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
+	require.Equal(t, []string{"udp4", "udp6"}, rec.firstTwo())
 }
 
 // Ensure UDP ASSOCIATE prefers udp6 when the client UDP source is IPv6, and falls back to udp4.
@@ -108,23 +144,17 @@ func TestUDP_FQDN_FallbackOrder_IPv6Client(t *testing.T) {
 	}
 	_ = udp6.Close()
 
-	var attempts []string
-	var pipeServer net.Conn
-	t.Cleanup(func() {
-		if pipeServer != nil {
-			_ = pipeServer.Close()
-		}
-	})
+	rec := &dialRecorder{}
+	t.Cleanup(rec.closePipe)
 
 	// Start server on IPv6 loopback so UDP bind will be IPv6
 	listen, stop := startSocks5On(t, "[::1]:0",
 		server.WithDialAndRequest(func(ctx context.Context, network, addr string, _ *handler.Request) (net.Conn, error) {
-			attempts = append(attempts, network)
-			if len(attempts) == 1 {
+			if rec.record(network) {
 				return nil, fmt.Errorf("fail first attempt")
 			}
 			client, srv := net.Pipe()
-			pipeServer = srv
+			rec.setPipe(srv)
 			go func() {
 				_, _ = io.Copy(io.Discard, srv)
 			}()
@@ -169,6 +199,6 @@ func TestUDP_FQDN_FallbackOrder_IPv6Client(t *testing.T) {
 	msg = append(msg, []byte("ping")...)
 	_, _ = client.WriteTo(msg, &net.UDPAddr{IP: net.IPv6loopback, Port: rep.BndAddr.Port})
 
-	require.Eventually(t, func() bool { return len(attempts) >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
-	require.Equal(t, []string{"udp6", "udp4"}, attempts[:2])
+	require.Eventually(t, func() bool { return rec.count() >= 2 }, 500*time.Millisecond, 10*time.Millisecond, "expected at least two dial attempts")
+	require.Equal(t, []string{"udp6", "udp4"}, rec.firstTwo())
 }

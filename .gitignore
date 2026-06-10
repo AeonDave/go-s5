@@ -1,7 +1,6 @@
 ### Intellij template
 .idea/
 
-
 #Sonarqube
 .scannerwork/
 .sonar
@@ -14,6 +13,9 @@ out/
 
 # SonarLint plugin
 .idea/sonarlint/
+
+# Graphify
+graphify-out/
 
 ### Go template
 *.exe

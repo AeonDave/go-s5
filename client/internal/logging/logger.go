@@ -21,9 +21,9 @@ const (
 
 // Logger defines the logging contract used by the client helpers.
 type Logger interface {
-	Debugf(format string, args ...interface{})
-	Infof(format string, args ...interface{})
-	Errorf(format string, args ...interface{})
+	Debugf(format string, args ...any)
+	Infof(format string, args ...any)
+	Errorf(format string, args ...any)
 }
 
 // Config controls the construction of a logger implementation.
@@ -70,7 +70,7 @@ func (l *stdLogger) shouldLog(lvl Level) bool {
 	return lvl <= l.level
 }
 
-func (l *stdLogger) logf(lvl Level, prefix, format string, args ...interface{}) {
+func (l *stdLogger) logf(lvl Level, prefix, format string, args ...any) {
 	if !l.shouldLog(lvl) {
 		return
 	}
@@ -80,15 +80,15 @@ func (l *stdLogger) logf(lvl Level, prefix, format string, args ...interface{}) 
 	l.base.Printf(format, args...)
 }
 
-func (l *stdLogger) Debugf(format string, args ...interface{}) {
+func (l *stdLogger) Debugf(format string, args ...any) {
 	l.logf(LevelDebug, "[debug] ", format, args...)
 }
 
-func (l *stdLogger) Infof(format string, args ...interface{}) {
+func (l *stdLogger) Infof(format string, args ...any) {
 	l.logf(LevelInfo, "[info] ", format, args...)
 }
 
-func (l *stdLogger) Errorf(format string, args ...interface{}) {
+func (l *stdLogger) Errorf(format string, args ...any) {
 	l.logf(LevelError, "[error] ", format, args...)
 }
 

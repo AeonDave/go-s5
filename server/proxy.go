@@ -23,7 +23,7 @@ type closeReader interface {
 	CloseRead() error
 }
 
-func (sf *Server) closeIgnoreErr(name string, c interface{}) {
+func (sf *Server) closeIgnoreErr(name string, c any) {
 	if c == nil {
 		return
 	}
@@ -217,13 +217,8 @@ func mapConnectDialError(err error) uint8 {
 	}
 
 	var netErr net.Error
-	if errors.As(err, &netErr) {
-		if netErr.Timeout() {
-			return protocol.RepTTLExpired
-		}
-		if netErr.Temporary() {
-			return protocol.RepNetworkUnreachable
-		}
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return protocol.RepTTLExpired
 	}
 
 	if errno := errnoFromError(err); errno != 0 {
