@@ -46,7 +46,7 @@ func TestCONNECT_DialTimeoutMapsToTTLExpired(t *testing.T) {
 	_, _ = c.Write(req.Bytes())
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepTTLExpired), rep.Response)
+	require.Equal(t, protocol.RepTTLExpired, rep.Response)
 }
 
 func TestCONNECT_NetworkUnreachableMapping(t *testing.T) {
@@ -79,5 +79,5 @@ func TestCONNECT_NetworkUnreachableMapping(t *testing.T) {
 	_, _ = c.Write(req.Bytes())
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepNetworkUnreachable), rep.Response)
+	require.Equal(t, protocol.RepNetworkUnreachable, rep.Response)
 }

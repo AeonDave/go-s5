@@ -282,16 +282,36 @@ func dialCmd(args []string) {
 		_, _ = fmt.Fprintln(os.Stderr, "-socks and -dest are required")
 		os.Exit(2)
 	}
+	opts := dialOptions{
+		socks: *socks, dest: *dest, user: *user, pass: *pass,
+		hs: *hs, ioTO: *ioTO, showLQ: *showLQ, lqInterval: *lqInterval,
+		stdio: *stdio, send: *send,
+	}
+	if err := runDial(opts); err != nil {
+		log.Fatalf("dial: %v", err)
+	}
+}
+
+type dialOptions struct {
+	socks, dest, user, pass string
+	hs, ioTO                string
+	showLQ                  bool
+	lqInterval              time.Duration
+	stdio                   bool
+	send                    string
+}
+
+func runDial(opts dialOptions) error {
 	// TCP to SOCKS server
 	dialStart := time.Now()
-	conn, err := net.Dial("tcp", *socks)
+	conn, err := net.Dial("tcp", opts.socks)
 	if err != nil {
-		log.Fatalf("dial socks: %v", err)
+		return fmt.Errorf("dial socks: %w", err)
 	}
 
 	var tracker *linkquality.Tracker
-	if *showLQ {
-		tracker = linkquality.NewTracker(linkquality.Metadata{RemoteAddr: *socks, Kind: linkquality.EndpointSOCKS5})
+	if opts.showLQ {
+		tracker = linkquality.NewTracker(linkquality.Metadata{RemoteAddr: opts.socks, Kind: linkquality.EndpointSOCKS5})
 		tracker.RecordProbe(time.Since(dialStart), nil)
 		conn = linkquality.WrapConn(conn, tracker)
 	}
@@ -300,79 +320,67 @@ func dialCmd(args []string) {
 	}(conn)
 
 	var copts []client.Option
-	if d := parseDuration(*hs); d > 0 {
+	if d := parseDuration(opts.hs); d > 0 {
 		copts = append(copts, client.WithHandshakeTimeout(d))
 	}
-	if d := parseDuration(*ioTO); d > 0 {
+	if d := parseDuration(opts.ioTO); d > 0 {
 		copts = append(copts, client.WithIOTimeout(d))
 	}
 	cli := client.New(copts...)
 
 	var creds *client.Credentials
-	if *user != "" || *pass != "" {
-		creds = &client.Credentials{Username: *user, Password: *pass}
+	if opts.user != "" || opts.pass != "" {
+		creds = &client.Credentials{Username: opts.user, Password: opts.pass}
 	}
-	ctx, cancel := ctxWithTimeout(*hs)
+	ctx, cancel := ctxWithTimeout(opts.hs)
 	hsStart := time.Now()
 	_, err = cli.Handshake(ctx, conn, creds)
 	cancel()
-	if err != nil {
-		if tracker != nil {
-			tracker.RecordProbe(time.Since(hsStart), err)
-		}
-		log.Fatalf("handshake: %v", err)
-	}
 	if tracker != nil {
-		tracker.RecordProbe(time.Since(hsStart), nil)
+		tracker.RecordProbe(time.Since(hsStart), err)
 	}
-	dst, err := protocol.ParseAddrSpec(*dest)
 	if err != nil {
-		log.Fatalf("parse dest: %v", err)
+		return fmt.Errorf("handshake: %w", err)
 	}
-	ctx2, cancel2 := ctxWithTimeout(*ioTO)
+	dst, err := protocol.ParseAddrSpec(opts.dest)
+	if err != nil {
+		return fmt.Errorf("parse dest: %w", err)
+	}
+	ctx2, cancel2 := ctxWithTimeout(opts.ioTO)
 	defer cancel2()
 	connStart := time.Now()
-	if _, err = cli.Connect(ctx2, conn, dst); err != nil {
-		if tracker != nil {
-			tracker.RecordProbe(time.Since(connStart), err)
-		}
-		log.Fatalf("connect failed")
-	}
+	_, err = cli.Connect(ctx2, conn, dst)
 	if tracker != nil {
-		tracker.RecordProbe(time.Since(connStart), nil)
+		tracker.RecordProbe(time.Since(connStart), err)
+	}
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
 	}
 
 	var stopMetrics chan struct{}
 	if tracker != nil {
 		stopMetrics = make(chan struct{})
-		go displayLinkQuality(tracker, *lqInterval, stopMetrics)
+		defer close(stopMetrics)
+		go displayLinkQuality(tracker, opts.lqInterval, stopMetrics)
 	}
 
-	if *stdio {
+	if opts.stdio {
 		// pipe stdin->conn and conn->stdout
 		go func() { _, _ = io.Copy(conn, os.Stdin); _ = halfCloseWrite(conn) }()
 		_, _ = io.Copy(os.Stdout, conn)
-		if stopMetrics != nil {
-			close(stopMetrics)
-		}
-		return
+		return nil
 	}
-	if *send != "" {
-		if _, err := conn.Write([]byte(*send)); err != nil {
-			log.Fatalf("send: %v", err)
+	if opts.send != "" {
+		if _, err := conn.Write([]byte(opts.send)); err != nil {
+			return fmt.Errorf("send: %w", err)
 		}
-		_ = conn.SetReadDeadline(time.Now().Add(parseDuration(*ioTO)))
+		_ = conn.SetReadDeadline(time.Now().Add(parseDuration(opts.ioTO)))
 		_, _ = io.Copy(os.Stdout, conn)
 		_ = conn.SetReadDeadline(time.Time{})
-		if stopMetrics != nil {
-			close(stopMetrics)
-		}
-		return
+		return nil
 	}
 	fmt.Println("connected (no stdio/send specified)")
-	if stopMetrics != nil {
-		close(stopMetrics)
-	}
+	return nil
 }
 
 func ctxWithTimeout(s string) (context.Context, context.CancelFunc) {

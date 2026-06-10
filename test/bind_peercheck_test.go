@@ -45,7 +45,7 @@ func TestBIND_PeerPortMismatch_ResultsInTTLExpired(t *testing.T) {
 
 	rep1, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep1.Response)
+	require.Equal(t, protocol.RepSuccess, rep1.Response)
 
 	// Connect from mismatched port (ephemeral) should be rejected and accept should continue
 	peer, err := net.Dial("tcp", net.JoinHostPort(rep1.BndAddr.IP.String(), fmt.Sprintf("%d", rep1.BndAddr.Port)))
@@ -58,5 +58,5 @@ func TestBIND_PeerPortMismatch_ResultsInTTLExpired(t *testing.T) {
 	rep2, err := protocol.ParseReply(c)
 	_ = c.SetReadDeadline(time.Time{})
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepTTLExpired), rep2.Response)
+	require.Equal(t, protocol.RepTTLExpired, rep2.Response)
 }

@@ -50,7 +50,7 @@ func TestCONNECT_ConnectionRefused(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepConnectionRefused), rep.Response)
+	require.Equal(t, protocol.RepConnectionRefused, rep.Response)
 }
 
 // RuleSet denies CONNECT should yield RepRuleFailure
@@ -84,7 +84,7 @@ func TestCONNECT_RuleBlocked(t *testing.T) {
 	// server should reject per rules before dialing
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepRuleFailure), rep.Response)
+	require.Equal(t, protocol.RepRuleFailure, rep.Response)
 	_ = c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	_, _ = c.Read(make([]byte, 1))
 }

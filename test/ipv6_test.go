@@ -70,7 +70,7 @@ func TestIPv6_CONNECT(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 	// Should advertise IPv6 bind addr type
 	require.Equal(t, byte(protocol.ATYPIPv6), rep.BndAddr.AddrType)
 
@@ -121,7 +121,7 @@ func TestIPv6_BIND(t *testing.T) {
 
 	rep2, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep2.Response)
+	require.Equal(t, protocol.RepSuccess, rep2.Response)
 
 	// client -> peer
 	_, _ = c.Write([]byte("ping"))

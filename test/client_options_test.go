@@ -58,7 +58,7 @@ func TestClientWithUDPLocalAddr(t *testing.T) {
 
 	assoc, rep, err := cli.UDPAssociate(ctx, conn)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 	t.Cleanup(func() { _ = assoc.Close() })
 
 	la := assoc.Conn.LocalAddr().(*net.UDPAddr)

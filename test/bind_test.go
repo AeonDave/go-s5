@@ -45,12 +45,12 @@ func TestBIND_TTLExpired(t *testing.T) {
 	// First reply should be success with bind address
 	rep1, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep1.Response)
+	require.Equal(t, protocol.RepSuccess, rep1.Response)
 
 	// Second reply should be TTLExpired after timeout
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	rep2, err := protocol.ParseReply(c)
 	_ = c.SetReadDeadline(time.Time{})
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepTTLExpired), rep2.Response)
+	require.Equal(t, protocol.RepTTLExpired, rep2.Response)
 }

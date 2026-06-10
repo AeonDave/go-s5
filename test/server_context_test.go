@@ -40,7 +40,7 @@ func dialAndExchange(t *testing.T, addr string, target *net.TCPAddr) {
 
 	rep, err := protocol.ParseReply(conn)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 
 	payload := make([]byte, 4)
 	_, err = io.ReadFull(conn, payload)

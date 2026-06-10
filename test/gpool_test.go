@@ -57,7 +57,7 @@ func Test_GPool_Submit_IsUsed(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 
 	// Expect proxied response
 	out := make([]byte, 4)

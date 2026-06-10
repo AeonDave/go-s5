@@ -61,7 +61,7 @@ func TestResolver_ErrorMapsToHostUnreachable(t *testing.T) {
 	_, _ = c.Write(req.Bytes())
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepHostUnreachable), rep.Response)
+	require.Equal(t, protocol.RepHostUnreachable, rep.Response)
 }
 
 func TestRewriter_OverridesDestination(t *testing.T) {
@@ -98,7 +98,7 @@ func TestRewriter_OverridesDestination(t *testing.T) {
 	// reply should be success thanks to rewrite
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 	// receive proxied echo
 	buf := make([]byte, 4)
 	_, err = io.ReadFull(c, buf)

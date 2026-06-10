@@ -38,7 +38,7 @@ func TestUnsupportedCommand(t *testing.T) {
 	_, _ = c.Write(req.Bytes())
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepCommandNotSupported), rep.Response)
+	require.Equal(t, protocol.RepCommandNotSupported, rep.Response)
 }
 
 func TestInvalidAddrType(t *testing.T) {
@@ -66,5 +66,5 @@ func TestInvalidAddrType(t *testing.T) {
 	_, _ = c.Write(req.Bytes())
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepAddrTypeNotSupported), rep.Response)
+	require.Equal(t, protocol.RepAddrTypeNotSupported, rep.Response)
 }

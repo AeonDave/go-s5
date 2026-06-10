@@ -102,7 +102,7 @@ func TestSOCKS5_Connect_OK(t *testing.T) {
 	rep, err := protocol.ParseReply(conn)
 	require.NoError(t, err)
 	require.Equal(t, byte(protocol.VersionSocks5), rep.Version)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 	// Read proxied payload
 	buf := make([]byte, 4)
 	_, err = io.ReadFull(conn, buf)

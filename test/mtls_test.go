@@ -136,7 +136,7 @@ func TestTLS_MutualAuth_SucceedsAndExposesCert(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 
 	// Read echoed subject
 	buf := make([]byte, 256)
@@ -235,7 +235,7 @@ func TestTLS_MutualAuth_ExposesAllSANIPs(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 
 	buf := make([]byte, 256)
 	_ = c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))

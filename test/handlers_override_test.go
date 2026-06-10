@@ -50,7 +50,7 @@ func TestBind_CustomHandler_OverridesDefault(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 }
 
 // Verify custom Associate handler is invoked and short-circuits default behavior.
@@ -86,5 +86,5 @@ func TestAssociate_CustomHandler_OverridesDefault(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 }

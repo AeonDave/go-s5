@@ -67,7 +67,7 @@ func TestCONNECT_UsesCustomDialer(t *testing.T) {
 
 	rep, err := protocol.ParseReply(c)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep.Response)
+	require.Equal(t, protocol.RepSuccess, rep.Response)
 
 	out := make([]byte, 4)
 	_, err = io.ReadFull(c, out)
