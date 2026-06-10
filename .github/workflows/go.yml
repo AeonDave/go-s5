@@ -36,3 +36,18 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Fuzz wire-format parsers (20s per target)
+        run: |
+          for target in FuzzParseDatagram FuzzParseRequest FuzzParseReply \
+                        FuzzParseMethodRequest FuzzParseUserPassRequest FuzzParseAddrSpec; do
+            go test -fuzz="^${target}\$" -fuzztime=20s -run xxx ./internal/protocol/
+          done
