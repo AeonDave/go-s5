@@ -313,9 +313,10 @@ func dialCmd(args []string) {
 		creds = &client.Credentials{Username: *user, Password: *pass}
 	}
 	ctx, cancel := ctxWithTimeout(*hs)
-	defer cancel()
 	hsStart := time.Now()
-	if _, err = cli.Handshake(ctx, conn, creds); err != nil {
+	_, err = cli.Handshake(ctx, conn, creds)
+	cancel()
+	if err != nil {
 		if tracker != nil {
 			tracker.RecordProbe(time.Since(hsStart), err)
 		}

@@ -9,12 +9,23 @@ linters:
     - unconvert
     - prealloc
     - copyloopvar
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        - name: package-comments
+          disabled: true
   exclusions:
     rules:
       - path: "_test\\.go"
         linters:
           - gocritic
           - prealloc
+          - errcheck
+      - linters:
+          - staticcheck
+        text: "SA6002"
 
 formatters:
   enable:

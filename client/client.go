@@ -468,7 +468,7 @@ func (c *Client) UDPAssociate(ctx context.Context, conn net.Conn) (*UDPAssociati
 	// Build UDP relay address from BND.ADDR
 	var relayIP net.IP
 	if len(rep.BndAddr.IP) > 0 {
-		relayIP = net.IP(rep.BndAddr.IP)
+		relayIP = rep.BndAddr.IP
 	} else {
 		// Resolve FQDN if the server returned a domain (rare)
 		ips, rerr := net.DefaultResolver.LookupIP(context.Background(), "ip", rep.BndAddr.FQDN)

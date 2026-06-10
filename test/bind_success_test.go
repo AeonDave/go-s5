@@ -46,7 +46,7 @@ func TestBIND_WithPeer_Success(t *testing.T) {
 	// first reply: bind address to connect to
 	rep1, err := protocol.ParseReply(client)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep1.Response)
+	require.Equal(t, protocol.RepSuccess, rep1.Response)
 	bindAddr := net.JoinHostPort(rep1.BndAddr.IP.String(), strconv.Itoa(rep1.BndAddr.Port))
 
 	// peer connects to bind address
@@ -59,7 +59,7 @@ func TestBIND_WithPeer_Success(t *testing.T) {
 	// second reply should indicate connected peer
 	rep2, err := protocol.ParseReply(client)
 	require.NoError(t, err)
-	require.Equal(t, byte(protocol.RepSuccess), rep2.Response)
+	require.Equal(t, protocol.RepSuccess, rep2.Response)
 
 	// now proxy is active: client -> peer
 	_, _ = client.Write([]byte("ping"))

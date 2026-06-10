@@ -352,9 +352,9 @@ func (sf *Server) ServeConnContext(ctx context.Context, conn net.Conn) error {
 		}
 		return fmt.Errorf("failed to read destination address: %w", err)
 	}
-	if !sf.isCommandSupported(request.Request.Command) {
+	if !sf.isCommandSupported(request.Command) {
 		_ = SendReply(conn, protocol.RepCommandNotSupported, nil)
-		return fmt.Errorf("unrecognized command[%d]", request.Request.Command)
+		return fmt.Errorf("unrecognized command[%d]", request.Command)
 	}
 
 	sf.clearHandshakeDeadline(conn)
