@@ -288,7 +288,7 @@ func dialCmd(args []string) {
 		stdio: *stdio, send: *send,
 	}
 	if err := runDial(opts); err != nil {
-		log.Fatalf("dial: %v", err)
+		log.Fatal("dial failed")
 	}
 }
 
